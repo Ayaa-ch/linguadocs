@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Data & storage (ne jamais committer)
+data/
+*.db
+*.sqlite
+
+# Logs
+*.log
