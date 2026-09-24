@@ -31,13 +31,41 @@ def index(user_id: str, items: list[dict]) -> None:
         for v, it in zip(vecs, items)])
 
 
-def search(user_id: str, query: str, k: int = 5):
+def delete_user_doc(user_id: str | int, doc_id: str | int) -> None:
+    """Supprime les vecteurs Qdrant d'un document spécifique (filtre user_id ET doc_id)."""
+    flt = models.Filter(must=[
+        models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id))),
+        models.FieldCondition(key="doc_id", match=models.MatchValue(value=str(doc_id))),
+    ])
+    client.delete(collection_name=COL, points_selector=flt, wait=True)
+
+
+def get_user_chunks(user_id: int | str) -> list[dict]:
+    """Retourne tous les chunks d'un utilisateur (pour vérifier l'isolation)."""
+    if user_id is None:
+        raise TypeError("user_id est obligatoire")
+    flt = models.Filter(must=[models.FieldCondition(
+        key="user_id", match=models.MatchValue(value=str(user_id)))])
+    # scroll avec filtre
+    records, _ = client.scroll(
+        collection_name=COL,
+        scroll_filter=flt,
+        limit=1000,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return [r.payload for r in records] if records else []
+
+
+def search(user_id: str | None, query: str, k: int = 5):
+    if user_id is None:
+        raise TypeError("user_id est obligatoire - filtre manquant")
     q = model.encode(
         f"query: {query}",
         normalize_embeddings=True).tolist()
     flt = models.Filter(must=[models.FieldCondition(
         key="user_id",
-        match=models.MatchValue(value=user_id))])
+        match=models.MatchValue(value=str(user_id)))])
     try:
         results = client.query_points(
             collection_name=COL,
