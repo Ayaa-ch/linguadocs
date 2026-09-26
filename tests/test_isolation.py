@@ -94,3 +94,69 @@ def test_search_sans_user_id_leve_typeerror():
         assert False, "search sans user_id devrait lever TypeError"
     except TypeError:
         pass
+
+
+def test_ask_isolation(client):
+    # alice uploade un fichier avec phrase secrète et attend indexed
+    email_alice = f"alice_ask_{uuid.uuid4().hex[:8]}@test.com"
+    r = client.post("/auth/register", json={"email": email_alice, "password": "AlicePass123"})
+    assert r.status_code == 201
+    token_alice = r.json()["access_token"]
+
+    email_bob = f"bob_ask_{uuid.uuid4().hex[:8]}@test.com"
+    r = client.post("/auth/register", json={"email": email_bob, "password": "BobPass123"})
+    assert r.status_code == 201
+    token_bob = r.json()["access_token"]
+
+    secret = f"PHRASE_ASK_SECRETE_{uuid.uuid4().hex}_ALICE"
+    alice_content = f"Document confidentiel Alice. {secret} Top secret.".encode("utf-8")
+
+    r = client.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token_alice}"},
+        files={"file": ("alice_ask.txt", alice_content, "text/plain")},
+    )
+    assert r.status_code == 201, r.text
+    doc_id = r.json()["id"]
+
+    for _ in range(20):
+        r = client.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_alice}"})
+        assert r.status_code == 200
+        if r.json()["status"] == "indexed":
+            break
+        if r.json()["status"] == "error":
+            assert False, f"indexation error: {r.json()['error']}"
+        time.sleep(0.5)
+    else:
+        assert False, "timeout attente indexed"
+
+    # bob appelle POST /ask avec la phrase secrète
+    r = client.post(
+        "/ask",
+        headers={"Authorization": f"Bearer {token_bob}"},
+        json={"question": secret, "stream": False},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "answer" in data and "sources" in data
+    sources = data["sources"]
+
+    # la réponse de bob ne doit pas contenir la phrase secrète
+    assert secret not in data.get("answer", ""), "fuite dans answer"
+    for s in sources:
+        assert secret not in (s.get("text") or ""), "phrase secrète fuite dans sources de bob"
+        # sources doivent appartenir à bob uniquement -> doc_id différent
+        assert s.get("doc_id") != doc_id
+
+    # bob n'a aucun doc => soit sources vide, soit answer = not found
+    if not sources:
+        assert data["answer"] == "Je ne trouve pas de réponse dans vos documents."
+
+    # vérification positive: alice retrouve sa phrase via /ask
+    r = client.post(
+        "/ask",
+        headers={"Authorization": f"Bearer {token_alice}"},
+        json={"question": secret},
+    )
+    assert r.status_code == 200
+    assert len(r.json()["sources"]) > 0

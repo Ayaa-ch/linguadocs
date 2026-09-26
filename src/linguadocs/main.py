@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from linguadocs.api.database import init_db
+from linguadocs.api.routes_auth import me_router as me_router
 from linguadocs.api.routes_auth import router as auth_router
 from linguadocs.api.routes_ask import router as ask_router
 from linguadocs.api.routes_documents import router as docs_router
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="LinguaDocs", version="0.1.0", lifespan=lifespan)
 
 app.include_router(auth_router)
+app.include_router(me_router)
 app.include_router(docs_router)
 app.include_router(ask_router)
 

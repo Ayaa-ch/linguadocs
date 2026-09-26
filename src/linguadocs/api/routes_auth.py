@@ -1,13 +1,19 @@
+import shutil
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from linguadocs.api.auth import create_token, hash_password, verify_password
+from linguadocs.api.auth import create_token, current_user, hash_password, verify_password
 from linguadocs.api.database import get_session
-from linguadocs.api.models import User
+from linguadocs.api.models import Document, User
+from linguadocs.settings import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+# route alias sans prefix pour DELETE /me (spec demande /me, router a prefix /auth)
+me_router = APIRouter(tags=["auth"])
 
 
 class RegisterRequest(BaseModel):
@@ -54,3 +60,52 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
 
     token = create_token(user.id)
     return TokenResponse(access_token=token)
+
+
+async def _delete_account(user: User, session: AsyncSession):
+    # user_id vient du token JWT uniquement
+    # 1. supprimer tous les documents (fichiers + vecteurs Qdrant + lignes SQL)
+    result = await session.exec(select(Document).where(Document.user_id == user.id))
+    docs = result.all()
+
+    # vecteurs Qdrant : bulk delete par user_id
+    try:
+        from linguadocs.retrieval.dense import client, COL
+        from qdrant_client import models
+
+        flt_user = models.Filter(
+            must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user.id)))]
+        )
+        client.delete(collection_name=COL, points_selector=flt_user, wait=True)
+    except Exception:
+        pass
+
+    # fichiers sur disque
+    user_dir = Path(settings.data_dir) / str(user.id)
+    if user_dir.exists():
+        shutil.rmtree(user_dir, ignore_errors=True)
+
+    # lignes Document
+    for d in docs:
+        await session.delete(d)
+
+    # 2. supprimer l'utilisateur
+    await session.delete(user)
+    await session.commit()
+    return {"detail": "Compte supprimé"}
+
+
+@router.delete("/me", status_code=status.HTTP_200_OK)
+async def delete_me(
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _delete_account(user, session)
+
+
+@me_router.delete("/me", status_code=status.HTTP_200_OK)
+async def delete_me_alias(
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _delete_account(user, session)
