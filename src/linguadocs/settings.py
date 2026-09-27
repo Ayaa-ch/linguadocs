@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     data_dir: str = "data/users"
     max_upload_mb: int = 50
+    refusal_threshold: float = 0.30
+    ollama_url: str = "http://localhost:11434/api/generate"
+    llm_model: str = "qwen3:4b"
+    search_mode: str = "hybrid"
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_top_n: int = 5
+    hybrid_dense_weight: float = 0.7
+    hybrid_sparse_weight: float = 0.3
 
 
 settings = Settings()

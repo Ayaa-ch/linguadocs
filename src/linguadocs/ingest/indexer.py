@@ -73,9 +73,9 @@ async def _run_index(
         if not chunks:
             raise ValueError("Aucun chunk généré")
 
-        # f. embedding + g. upsert Qdrant
+        # f. embedding + g. upsert Qdrant (dense + sparse BM25)
         # on prépare payloads: {user_id, doc_id, chunk_key, lang, page, text}
-        from linguadocs.retrieval.dense import init, index as dense_index
+        from linguadocs.retrieval.retrieval import init, index as dense_index
 
         init(reset=False)
 

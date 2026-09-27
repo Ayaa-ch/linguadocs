@@ -67,16 +67,19 @@ def test_isolation_alice_bob(client):
         # cas nominal: bob n'a pas de doc, donc pas de source
         assert data["answer"] == "Je ne trouve pas de réponse dans vos documents." or len(sources) == 0
 
-    # vérifier côté alice qu'elle retrouve bien sa phrase
-    r = client.post(
-        "/ask",
-        headers={"Authorization": f"Bearer {token_alice}"},
-        json={"question": secret},
-    )
-    assert r.status_code == 200
-    data_alice = r.json()
-    assert len(data_alice["sources"]) > 0
-    assert any(secret in (s.get("text") or "") or doc_id == s.get("doc_id") for s in data_alice["sources"])
+    # vérifier côté alice qu'elle retrouve bien sa phrase (mock LLM pour éviter lenteur Ollama)
+    from unittest.mock import AsyncMock, patch
+
+    with patch("linguadocs.api.routes_ask.generate", new=AsyncMock(return_value="ok")):
+        r = client.post(
+            "/ask",
+            headers={"Authorization": f"Bearer {token_alice}"},
+            json={"question": secret},
+        )
+        assert r.status_code == 200
+        data_alice = r.json()
+        assert len(data_alice["sources"]) > 0
+        assert any(secret in (s.get("text") or "") or doc_id == s.get("doc_id") for s in data_alice["sources"])
 
 
 def test_search_sans_user_id_leve_typeerror():
@@ -152,11 +155,14 @@ def test_ask_isolation(client):
     if not sources:
         assert data["answer"] == "Je ne trouve pas de réponse dans vos documents."
 
-    # vérification positive: alice retrouve sa phrase via /ask
-    r = client.post(
-        "/ask",
-        headers={"Authorization": f"Bearer {token_alice}"},
-        json={"question": secret},
-    )
-    assert r.status_code == 200
-    assert len(r.json()["sources"]) > 0
+    # vérification positive: alice retrouve sa phrase via /ask (mock LLM)
+    from unittest.mock import AsyncMock, patch
+
+    with patch("linguadocs.api.routes_ask.generate", new=AsyncMock(return_value="ok")):
+        r = client.post(
+            "/ask",
+            headers={"Authorization": f"Bearer {token_alice}"},
+            json={"question": secret},
+        )
+        assert r.status_code == 200
+        assert len(r.json()["sources"]) > 0

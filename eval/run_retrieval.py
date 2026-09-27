@@ -53,6 +53,28 @@ def evaluate(path: str = "eval/datasets/un_pairs.jsonl",
     return rows
 
 
+def evaluate_refusal(path: str = "eval/datasets/un_pairs_hors_domaine.jsonl", k: int = 5, threshold: float = 0.30) -> dict:
+    try:
+        from linguadocs.settings import settings
+        threshold = settings.refusal_threshold
+    except Exception:
+        pass
+    lines = [json.loads(l) for l in open(path, encoding="utf-8")]
+    refus_corrects = 0
+    faux_refus = 0
+    total = len(lines)
+    for q in lines:
+        hits = search(q["user_id"], q["query"], k)
+        best = max((getattr(h, "score", 0) or 0) for h in hits) if hits else 0
+        should_refuse = q.get("should_refuse", True)
+        is_refused = best < threshold or not hits
+        if should_refuse and is_refused:
+            refus_corrects += 1
+        elif not should_refuse and is_refused:
+            faux_refus += 1
+    return {"refus_corrects": refus_corrects, "faux_refus": faux_refus, "total": total, "seuil": threshold}
+
+
 if __name__ == "__main__":
     index_corpus()
     print("\n--- Résultats recall@5 ---")
@@ -62,3 +84,9 @@ if __name__ == "__main__":
         print(f"{r['query_lang']:>6} → {r['target_lang']:>6} | "
               f"{r['n']:>4} | {r['recall@5']:>8} | "
               f"{r['ci95']:>15} | {r['mrr']:>6}")
+    print("\n--- Évaluation refus hors-domaine ---")
+    try:
+        res = evaluate_refusal()
+        print(f"Seuil: {res['seuil']} | Refus corrects: {res['refus_corrects']}/{res['total']} | Faux refus: {res['faux_refus']}")
+    except Exception as e:
+        print(f"evaluate_refusal error: {e}")

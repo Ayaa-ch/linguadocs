@@ -212,7 +212,7 @@ async def delete_document(
 
     # delete vectors Qdrant (filtre user_id ET doc_id obligatoire)
     try:
-        from linguadocs.retrieval.dense import delete_user_doc
+        from linguadocs.retrieval.retrieval import delete_user_doc
 
         delete_user_doc(str(user.id), str(doc.id))
     except Exception:

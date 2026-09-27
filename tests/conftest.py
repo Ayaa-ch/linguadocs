@@ -1,28 +1,25 @@
 import asyncio
-import os
 import uuid
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from linguadocs.main import app
 from linguadocs.api.database import get_session
 
-# SQLite fichier pour les tests (partagé entre event loops, pas PostgreSQL)
-TEST_DB_PATH = Path("./test.db")
-TEST_DB_URL = f"sqlite+aiosqlite:///{TEST_DB_PATH}"
+# SQLite en mémoire partagée pour les tests (pas PostgreSQL)
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(
     TEST_DB_URL,
     echo=False,
     future=True,
-    poolclass=NullPool,
+    poolclass=StaticPool,
     connect_args={"check_same_thread": False},
 )
 TestSessionLocal = sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
@@ -44,6 +41,10 @@ async def _drop_tables():
         await conn.run_sync(SQLModel.metadata.drop_all)
 
 
+# créer les tables une fois au chargement
+asyncio.run(_create_tables())
+
+
 async def get_test_session():
     async with TestSessionLocal() as session:
         yield session
@@ -55,15 +56,11 @@ app.dependency_overrides[get_session] = get_test_session
 
 @pytest.fixture(scope="function")
 def client():
-    # nettoyer et recréer les tables avant chaque test (même fichier, même engine)
-    # on utilise asyncio.run car on est hors event loop (sync fixture)
+    # nettoyer et recréer les tables avant chaque test (même engine, StaticPool)
     asyncio.run(_drop_tables())
     asyncio.run(_create_tables())
     with TestClient(app) as c:
         yield c
-    # optionnel: nettoyer après
-    # asyncio.run(_drop_tables())
-    # ne pas supprimer le fichier, il sera réutilisé
 
 
 @pytest.fixture

@@ -70,7 +70,7 @@ async def _delete_account(user: User, session: AsyncSession):
 
     # vecteurs Qdrant : bulk delete par user_id
     try:
-        from linguadocs.retrieval.dense import client, COL
+        from linguadocs.retrieval.retrieval import client, COL
         from qdrant_client import models
 
         flt_user = models.Filter(
