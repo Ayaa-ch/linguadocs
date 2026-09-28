@@ -18,9 +18,11 @@ def index_corpus(path: str = "eval/datasets/un_corpus.jsonl", user_id: str = "al
     print("Indexation terminee")
 
 # pour pouvoir comparer, on réutilise la même logique que run_retrieval
-def evaluate_mode(search_fn, path: str = "eval/datasets/un_pairs.jsonl", k: int = 5):
+def evaluate_mode(search_fn, path: str = "eval/datasets/un_pairs.jsonl", k: int = 5, limit: int | None = None):
     per = collections.defaultdict(lambda: {"hit": [], "rr": []})
     lines = [json.loads(l) for l in open(path, encoding="utf-8")]
+    if limit:
+        lines = lines[:limit]
     for q in lines:
         hits = search_fn(q["user_id"], q["query"], k)
         keys = []
@@ -67,8 +69,8 @@ def main():
     }
     all_rows = []
     for mode_name, fn in modes.items():
-        print(f"\n=== {mode_name} ===")
-        rows = evaluate_mode(fn)
+        print(f"\n=== {mode_name} (echantillon 200/4944 pour eviter 2h) ===")
+        rows = evaluate_mode(fn, limit=200)
         for r in rows:
             print(f"{r['query_lang']:>6} -> {r['target_lang']:>6} | n={r['n']:>4} | recall@5={r['recall@5']} | mrr={r['mrr']}")
         for r in rows:

@@ -75,8 +75,8 @@ def build(pairs: list[dict], langs=("fr", "en", "ar", "es"),
                     "relevant"    : [f"{p['doc']}#{i}:{tlang}"],
                 }, ensure_ascii=False) + "\n")
 
-    print(f"✅ Corpus  : {OUT_DIR}/un_corpus.jsonl")
-    print(f"✅ Requêtes: {OUT_DIR}/un_pairs.jsonl")
+    print(f" Corpus  : {OUT_DIR}/un_corpus.jsonl")
+    print(f" Requêtes: {OUT_DIR}/un_pairs.jsonl")
 
 
 if __name__ == "__main__":
