@@ -21,7 +21,7 @@ AsyncSessionLocal = sessionmaker(
 
 async def init_db() -> None:
     """Crée les tables si elles n'existent pas."""
-    from linguadocs.api.models import User, Document  # noqa: F401 ensure models imported
+    from linguadocs.api.models import ChatMessage, Document, User  # noqa: F401 ensure models imported
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)

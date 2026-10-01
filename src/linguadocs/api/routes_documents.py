@@ -7,7 +7,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from linguadocs.api.auth import current_user
-from linguadocs.api.models import Document, User
+from linguadocs.api.models import ChatMessage, Document, User
 from linguadocs.api.database import get_session
 from linguadocs.ingest.indexer import index_document
 from linguadocs.settings import settings
@@ -223,6 +223,18 @@ async def delete_document(
     save_dir = Path(settings.data_dir) / str(user.id) / str(doc.id)
     if save_dir.exists():
         shutil.rmtree(save_dir, ignore_errors=True)
+
+    # delete chat history liée (isolation user_id)
+    try:
+        from sqlmodel import delete as _delete
+
+        await session.exec(
+            _delete(ChatMessage).where(
+                ChatMessage.user_id == user.id, ChatMessage.doc_id == str(doc.id)
+            )
+        )
+    except Exception:
+        pass
 
     await session.delete(doc)
     await session.commit()

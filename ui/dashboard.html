@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LinguaDocs — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="api-banner" class="api-banner">⚠️ Cannot connect to API (port 8000). Make sure the server is running.</div>
+<div class="dash">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">📚 LinguaDocs</div>
+      <div class="sidebar-user" id="user-email"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="section-title">My Documents</div>
+      <div id="doc-list"></div>
+    </div>
+    <div class="sidebar-actions">
+      <button class="btn btn-upload" id="btn-open-upload">➕ Upload Document</button>
+    </div>
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost btn-logout" id="btn-logout">🚪 Logout</button>
+    </div>
+  </aside>
+
+  <!-- CHAT -->
+  <main class="chat">
+    <div class="chat-header">
+      <span class="chat-doc-name" id="chat-doc-name">No document selected</span>
+      <span class="lang-badge" id="chat-doc-lang" style="display:none"></span>
+      <select id="search-mode" title="Mode de recherche" style="margin-left:auto;font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        <option value="hybrid" selected>Hybrid</option>
+        <option value="dense">Dense</option>
+        <option value="sparse">Sparse</option>
+      </select>
+      <button id="btn-clear-hist" title="Effacer l'historique" style="font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;cursor:pointer">🗑️</button>
+    </div>
+    <div class="messages" id="messages">
+      <div class="empty-hint" id="empty-hint">Select a document from the sidebar to start asking questions</div>
+    </div>
+    <div class="input-zone">
+      <input id="question-input" type="text" placeholder="Select a document first..." disabled />
+      <button class="btn btn-stop" id="btn-stop" style="display:none">⏹ Stop</button>
+      <button class="btn btn-send" id="btn-send" disabled>Send ➤</button>
+    </div>
+  </main>
+</div>
+
+<!-- MODAL UPLOAD -->
+<div class="modal-overlay" id="upload-modal">
+  <div class="modal">
+    <h2>Upload Document</h2>
+    <div class="dropzone" id="dropzone">
+      <div class="cloud">☁️</div>
+      <p>Drag &amp; drop or click to browse</p>
+      <small>PDF, TXT, MD, DOCX · Max 50MB</small>
+      <input type="file" id="file-input" accept=".pdf,.txt,.md,.docx" style="display:none" />
+    </div>
+    <div class="file-chosen" id="file-chosen"></div>
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-bar"><div class="progress-fill"></div></div>
+      <div class="upload-status waiting" id="upload-status"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-cancel-upload">Cancel</button>
+      <button class="btn" id="btn-do-upload" disabled>Upload</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+(function () {
+  const { apiCall, apiErrorMessage, logout, requireAuth } = window.LD;
+  if (!requireAuth()) return;
+
+  const docListEl = document.getElementById("doc-list");
+  const messagesEl = document.getElementById("messages");
+  const emptyHint = document.getElementById("empty-hint");
+  const chatDocName = document.getElementById("chat-doc-name");
+  const chatDocLang = document.getElementById("chat-doc-lang");
+  const qInput = document.getElementById("question-input");
+  const btnSend = document.getElementById("btn-send");
+  const btnStop = document.getElementById("btn-stop");
+  const banner = document.getElementById("api-banner");
+
+  document.getElementById("user-email").textContent =
+    localStorage.getItem("linguadocs_email") || "";
+  document.getElementById("btn-logout").addEventListener("click", logout);
+  document.getElementById("btn-clear-hist").addEventListener("click", () => { if (activeDocId) clearHistory(activeDocId); });
+
+  let docs = [];
+  let activeDocId = null;
+  const histories = {}; // doc_id -> [{role, data}]
+  let sending = false;
+  let activeCtrl = null;   // AbortController de la question en cours
+  let activeReader = null; // lecteur SSE en cours
+  let userStopped = false; // true si l'utilisateur a cliqué Stop
+  let pollTimer = null;
+  let refreshTimer = null;
+
+  const LANG_FLAG = { fr: "🇫🇷 FR", en: "🇬🇧 EN", ar: "🇸🇦 AR", es: "🇪🇸 ES" };
+  const langBadge = (l) => LANG_FLAG[(l || "").toLowerCase()] || ("🌐 " + String(l || "?").toUpperCase());
+
+  function iconFor(doc) {
+    const t = (doc.doc_type || "").toLowerCase();
+    if (t === "pdf") return "📄";
+    if (t === "txt") return "📝";
+    if (t === "docx") return "📋";
+    if (t === "md") return "⬇️";
+    const n = (doc.filename || "").toLowerCase();
+    if (n.endsWith(".pdf")) return "📄";
+    if (n.endsWith(".txt")) return "📝";
+    if (n.endsWith(".docx")) return "📋";
+    if (n.endsWith(".md")) return "⬇️";
+    return "📄";
+  }
+  function shortName(name) {
+    if (!name) return "";
+    return name.length > 18 ? name.slice(0, 18) + "..." : name;
+  }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function setBanner(show) { banner.classList.toggle("show", !!show); }
+
+  async function loadDocs() {
+    try {
+      docs = await apiCall("/documents", { method: "GET" });
+      setBanner(false);
+    } catch (e) {
+      if (e.message === "network") { setBanner(true); return; }
+      throw e;
+    }
+    renderDocs();
+    // rafraîchir toutes les 3s si au moins un processing/queued
+    const busy = docs.some(d => d.status === "processing" || d.status === "queued");
+    if (busy && !refreshTimer) {
+      refreshTimer = setInterval(async () => {
+        try {
+          const fresh = await apiCall("/documents", { method: "GET" });
+          docs = fresh; setBanner(false); renderDocs(false);
+          if (!docs.some(d => d.status === "processing" || d.status === "queued")) {
+            clearInterval(refreshTimer); refreshTimer = null;
+          }
+        } catch (e) { if (e.message === "network") setBanner(true); }
+      }, 3000);
+    }
+  }
+
+  function renderDocs(keepActive = true) {
+    docListEl.innerHTML = "";
+    if (!docs.length) {
+      docListEl.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:4px">No documents yet.</div>';
+      return;
+    }
+    docs.forEach(d => {
+      const div = document.createElement("div");
+      div.className = "doc-item" + (d.id === activeDocId ? " active" : "");
+      const spin = d.status === "processing" ? '<span class="spinner"></span>' : "";
+      div.innerHTML =
+        '<span class="doc-icon">' + iconFor(d) + '</span>' +
+        '<span class="doc-name" title="' + esc(d.filename) + '">' + esc(shortName(d.filename)) + '</span>' +
+        '<span class="badge badge-' + esc(d.status) + '">' + spin + esc(d.status) + '</span>' +
+        '<button class="doc-del" title="Delete">🗑️</button>';
+      div.addEventListener("click", () => selectDoc(d.id));
+      div.querySelector(".doc-del").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        deleteDoc(d);
+      });
+      docListEl.appendChild(div);
+    });
+    updateChatHeader();
+  }
+
+  function activeDoc() { return docs.find(d => d.id === activeDocId) || null; }
+
+  function updateChatHeader() {
+    const d = activeDoc();
+    if (!d) {
+      chatDocName.textContent = "No document selected";
+      chatDocLang.style.display = "none";
+      qInput.disabled = true; btnSend.disabled = true;
+      qInput.placeholder = "Select a document first...";
+      return;
+    }
+    chatDocName.textContent = d.filename;
+    if (d.lang) {
+      chatDocLang.style.display = ""; chatDocLang.textContent = langBadge(d.lang);
+    } else chatDocLang.style.display = "none";
+    qInput.disabled = false; btnSend.disabled = false;
+    qInput.placeholder = "Ask a question about " + shortName(d.filename) + "...";
+  }
+
+  function selectDoc(id) {
+    activeDocId = id;
+    if (!histories[id]) histories[id] = [];
+    renderDocs();
+    renderHistory();
+    updateChatHeader();
+    // historique persistant par utilisateur (backend, isolé par JWT)
+    // + cache localStorage pour affichage instantané avant fetch
+    loadHistory(id);
+  }
+
+  function historyCacheKey(docId) {
+    const email = (localStorage.getItem("linguadocs_email") || "anon").toLowerCase();
+    return "ld_hist_" + email + "_" + docId;
+  }
+
+  async function loadHistory(docId) {
+    // 1) cache instantané
+    try {
+      const cached = localStorage.getItem(historyCacheKey(docId));
+      if (cached && (!histories[docId] || !histories[docId].length)) {
+        const arr = JSON.parse(cached);
+        if (Array.isArray(arr) && arr.length) {
+          histories[docId] = arr;
+          if (docId === activeDocId) renderHistory();
+        }
+      }
+    } catch (_) {}
+    // 2) source de vérité backend
+    try {
+      const rows = await apiCall("/history?doc_id=" + encodeURIComponent(docId), { method: "GET" });
+      const mapped = (rows || []).map(r => r.role === "user"
+        ? { role: "user", text: r.content }
+        : { role: "bot", data: { answer: r.content, sources: r.sources || [], question_lang: r.question_lang || "fr", refused: !!r.refused, latency_ms: null } });
+      histories[docId] = mapped;
+      try { localStorage.setItem(historyCacheKey(docId), JSON.stringify(mapped.slice(-100))); } catch (_) {}
+      if (docId === activeDocId) renderHistory();
+    } catch (e) { /* offline : on garde le cache */ }
+  }
+
+  async function saveHistory(docId, role, content, extra) {
+    const item = role === "user" ? { role, text: content } : { role, data: extra };
+    // cache local d'abord (survit au reload même si backend down)
+    try {
+      const key = historyCacheKey(docId);
+      const cur = JSON.parse(localStorage.getItem(key) || "[]");
+      cur.push(item);
+      localStorage.setItem(key, JSON.stringify(cur.slice(-100)));
+    } catch (_) {}
+    // backend (isolation user_id via JWT)
+    try {
+      await apiCall("/history", { method: "POST",
+        body: JSON.stringify(Object.assign({ doc_id: docId, role, content }, extra && role === "bot" ? {
+          sources: (extra.sources || []).map(s => ({ filename: s.filename, page: s.page, score: s.score, text: (s.text || "").slice(0, 2000), doc_id: s.doc_id })),
+          question_lang: extra.question_lang, refused: !!extra.refused } : {})) });
+    } catch (_) {}
+  }
+
+  async function clearHistory(docId) {
+    if (!confirm("Effacer l'historique de ce document ?")) return;
+    histories[docId] = [];
+    try { localStorage.removeItem(historyCacheKey(docId)); } catch (_) {}
+    try { await apiCall("/history?doc_id=" + encodeURIComponent(docId), { method: "DELETE" }); } catch (_) {}
+    renderHistory();
+  }
+
+  function renderHistory() {
+    messagesEl.innerHTML = "";
+    const h = histories[activeDocId] || [];
+    if (!h.length) {
+      messagesEl.innerHTML = '<div class="empty-hint">Select a document from the sidebar to start asking questions</div>';
+      const d = activeDoc();
+      if (d) messagesEl.innerHTML = '<div class="empty-hint">Ask a question about <b>' + esc(d.filename) + '</b></div>';
+      return;
+    }
+    h.forEach(item => {
+      if (item.role === "user") appendUserBubble(item.text, true);
+      else appendBotBubble(item.data, true);
+    });
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function appendUserBubble(text, fromHistory) {
+    const row = document.createElement("div");
+    row.className = "msg-row user";
+    row.innerHTML = '<div class="bubble">' + esc(text) + '</div>';
+    messagesEl.appendChild(row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function appendBotBubble(data, fromHistory) {
+    // data: {answer, sources, question_lang, refused, latency_ms}
+    data.answer = stripThink(data.answer);
+    const row = document.createElement("div");
+    row.className = "msg-row bot";
+    const rtl = (data.question_lang || "").toLowerCase() === "ar" ? " rtl" : "";
+    const b = document.createElement("div");
+    b.className = "bubble" + rtl;
+    b.textContent = data.answer;
+    row.appendChild(b);
+    messagesEl.appendChild(row);
+
+    appendMsgMeta(data);
+  }
+
+  // Bulle vide pour le streaming : les tokens sont ajoutés au fur et à mesure
+  function appendStreamRow(questionLang) {
+    const row = document.createElement("div");
+    row.className = "msg-row bot";
+    const rtl = (questionLang || "").toLowerCase() === "ar" ? " rtl" : "";
+    const b = document.createElement("div");
+    b.className = "bubble" + rtl;
+    row.appendChild(b);
+    messagesEl.appendChild(row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return b;
+  }
+
+  // Sécurité affichage : enlève un éventuel <think>...</think> résiduel
+  // (si vieux Ollama ignore think:false). Le backend filtre déjà.
+  function stripThink(s) {
+    if (!s) return s;
+    let out = String(s).replace(/<think[\s\S]*?<\/think>/gi, "");
+    out = out.replace(/<think[^>]*>/gi, "").replace(/<\/think[^>]*>/gi, "");
+    return out;
+  }
+
+  function appendMsgMeta(data) {
+    const meta = document.createElement("div");
+    meta.className = "msg-row bot"; meta.style.marginTop = "-10px";
+    const inner = document.createElement("div");
+    inner.className = "msg-meta";
+    inner.innerHTML = '<span class="lang-badge msg-lang">' + esc(langBadge(data.question_lang)) + '</span>';
+    if (data.refused) {
+      inner.innerHTML += '<div class="refused-banner">⚠️ No answer found in your documents</div>';
+    }
+    if (data.sources && data.sources.length) {
+      const s = document.createElement("div");
+      s.className = "sources";
+      data.sources.slice(0, 5).forEach(src => {
+        const c = document.createElement("div");
+        c.className = "source-card";
+        const score = typeof src.score === "number" ? src.score.toFixed(2) : src.score;
+        c.textContent = "📄 " + (src.filename || "?") + " | Page " + (src.page != null ? src.page : "?") + " | Score: " + score;
+        s.appendChild(c);
+      });
+      inner.appendChild(s);
+    }
+    if (data.latency_ms) {
+      const l = data.latency_ms;
+      const fmt = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms";
+      const lat = document.createElement("div");
+      lat.className = "latency";
+      lat.textContent = "retrieve " + fmt(l.retrieve || 0) + " · generate " + fmt(l.generate || 0) + " · total " + fmt(l.total || 0);
+      inner.appendChild(lat);
+    }
+    meta.appendChild(inner);
+    messagesEl.appendChild(meta);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function appendTyping() {
+    const row = document.createElement("div");
+    row.className = "msg-row bot"; row.id = "typing-row";
+    row.innerHTML = '<div class="typing"><span class="spinner big"></span> Thinking...</div>';
+    messagesEl.appendChild(row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+  function removeTyping() {
+    const t = document.getElementById("typing-row");
+    if (t) t.remove();
+  }
+
+  async function sendQuestion() {
+    const d = activeDoc();
+    if (!d || sending) return;
+    const q = qInput.value.trim();
+    if (!q) return;
+    sending = true;
+    userStopped = false;
+    qInput.disabled = true; btnSend.disabled = true;
+    btnStop.style.display = "";
+    if (emptyHint) emptyHint.remove();
+    appendUserBubble(q);
+    histories[d.id].push({ role: "user", text: q });
+    saveHistory(d.id, "user", q);
+    qInput.value = "";
+    appendTyping();
+    const tStart = performance.now();
+    try {
+      // Streaming SSE : les tokens s'affichent au fur et à mesure
+      const token = window.LD.getToken();
+      activeCtrl = new AbortController();
+      const ctrl = activeCtrl;
+      const HARD_MS = 600000; // 10 min max par question (couvre cold start)
+      const hardTimer = setTimeout(() => { try { ctrl.abort(); } catch (_) {} }, HARD_MS);
+      let res;
+      try {
+        res = await fetch(window.LD.API_BASE + "/ask", {
+          method: "POST",
+          signal: ctrl.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify({ question: q, stream: true, search_mode: (document.getElementById("search-mode") || {}).value || "hybrid" })
+        });
+      } catch (e) {
+        clearTimeout(hardTimer);
+        removeTyping();
+        if (userStopped) {
+          // Stop pendant l'attente des headers : rien à afficher
+        } else if (e && e.name === "AbortError") {
+          appendBotBubble({ answer: "Request timed out (> 10 min).", sources: [], question_lang: "en", refused: true, latency_ms: null });
+        } else {
+          setBanner(true);
+        }
+        sending = false; updateChatHeader();
+        return;
+      }
+      if (res.status === 401) { clearTimeout(hardTimer); logout(); return; }
+      if (!res.ok) {
+        clearTimeout(hardTimer);
+        removeTyping();
+        let detail = "Request failed.";
+        try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
+        appendBotBubble({ answer: detail, sources: [], question_lang: "en", refused: true, latency_ms: null });
+        sending = false; updateChatHeader();
+        return;
+      }
+      setBanner(false);
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("text/event-stream")) {
+        // Cas refusé (ou autre JSON) : réponse complète d'un coup
+        clearTimeout(hardTimer);
+        const data = await res.json();
+        removeTyping();
+        appendBotBubble(data);
+        histories[d.id].push({ role: "bot", data });
+        saveHistory(d.id, "bot", data.answer || "", data);
+        sending = false; updateChatHeader();
+        return;
+      }
+      // --- SSE (avec watchdog anti-blocage ; timeout global déjà armé) ---
+      removeTyping();
+      const STALL_MS = 240000; // sans aucun token pendant 4 min => on coupe (couvre cold start ~190s)
+      // NOTE: le hard timeout (10 min) tourne depuis l'envoi du fetch.
+      const reader = res.body.getReader();
+      activeReader = reader;
+      const decoder = new TextDecoder();
+      let buf = "";
+      let sources = [], questionLang = "", answer = "";
+      let serverLatency = null;
+      let bubble = null;
+      let lastData = Date.now();
+      let stalled = false;
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastData > STALL_MS) {
+          stalled = true;
+          try { reader.cancel(); } catch (_) {}
+          try { ctrl.abort(); } catch (_) {}
+        }
+      }, 5000);
+      const flush = () => {
+        const events = buf.split("\n\n");
+        buf = events.pop();
+        for (const ev of events) {
+          const line = ev.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") return true;
+          try {
+            const obj = JSON.parse(payload);
+            if (obj.latency_ms && !obj.token && !obj.sources) {
+              serverLatency = obj.latency_ms;
+            } else if (obj.sources) {
+              sources = obj.sources;
+              questionLang = obj.question_lang || "";
+              if (obj.latency_ms) serverLatency = Object.assign({}, serverLatency || {}, obj.latency_ms);
+              bubble = appendStreamRow(questionLang);
+            } else if (obj.token) {
+              if (!bubble) bubble = appendStreamRow(questionLang);
+              answer += obj.token;
+              bubble.textContent = stripThink(answer);
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+          } catch (_) {}
+        }
+        return false;
+      };
+      let done = false;
+      let readFailed = false;
+      try {
+        while (!done) {
+          const { value, done: rDone } = await reader.read();
+          if (rDone) break;
+          lastData = Date.now();
+          buf += decoder.decode(value, { stream: true });
+          if (flush()) { done = true; break; }
+        }
+        flush();
+      } catch (readErr) {
+        // Flux coupé (watchdog, réseau, serveur) : on garde le partiel
+        readFailed = true;
+        if (!answer && !bubble) {
+          bubble = appendStreamRow(questionLang);
+        }
+      } finally {
+        clearInterval(watchdog);
+        clearTimeout(hardTimer);
+        try { reader.releaseLock(); } catch (_) {}
+      }
+      const totalMs = Math.round(performance.now() - tStart);
+      if (userStopped && !answer && bubble) bubble.remove();
+      const cutNote = userStopped
+        ? "\n\n⏹️ Réponse arrêtée par l'utilisateur."
+        : stalled
+        ? "\n\n⚠️ Réponse interrompue (flux sans données > 4 min). Reposez la question."
+        : (readFailed && answer ? "\n\n⚠️ Flux coupé avant la fin de la réponse." : "");
+      const finalLatency = serverLatency || {};
+      if (!finalLatency.total) finalLatency.total = totalMs;
+      if (!finalLatency.retrieve && !finalLatency.generate) {
+        // fallback si serveur ancien sans latences : mesure client
+        finalLatency.retrieve = finalLatency.retrieve || 0;
+        finalLatency.generate = finalLatency.generate || 0;
+      }
+      const data = {
+        answer: (stripThink(answer) || "(no response)") + cutNote,
+        sources, question_lang: questionLang,
+        refused: false,
+        latency_ms: finalLatency
+      };
+      appendMsgMeta(data);
+      histories[d.id].push({ role: "bot", data });
+      if (!userStopped) saveHistory(d.id, "bot", data.answer, data);
+    } catch (e) {
+      removeTyping();
+      if (e && e.message === "unauthorized") return;
+      appendBotBubble({ answer: "Request failed.", sources: [], question_lang: "en", refused: true, latency_ms: null });
+    } finally {
+      sending = false;
+      activeCtrl = null;
+      activeReader = null;
+      btnStop.style.display = "none";
+      updateChatHeader();
+    }
+  }
+
+  btnSend.addEventListener("click", sendQuestion);
+  qInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendQuestion(); });
+  btnStop.addEventListener("click", () => {
+    if (!sending) return;
+    userStopped = true;
+    try { if (activeReader) activeReader.cancel(); } catch (_) {}
+    try { if (activeCtrl) activeCtrl.abort(); } catch (_) {}
+  });
+
+  async function deleteDoc(d) {
+    if (!confirm("Delete " + d.filename + "? This cannot be undone.")) return;
+    try {
+      await apiCall("/documents/" + d.id, { method: "DELETE" });
+      setBanner(false);
+      delete histories[d.id];
+      try {
+        const email = (localStorage.getItem("linguadocs_email") || "anon").toLowerCase();
+        localStorage.removeItem("ld_hist_" + email + "_" + d.id);
+      } catch (_) {}
+      if (activeDocId === d.id) activeDocId = null;
+      await loadDocs();
+      renderHistory(); updateChatHeader();
+    } catch (e) {
+      if (e.message === "network") { setBanner(true); return; }
+      if (e.message === "unauthorized") return;
+      alert(apiErrorMessage(e, "Delete failed."));
+    }
+  }
+
+  /* ----- Upload modal ----- */
+  const modal = document.getElementById("upload-modal");
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("file-input");
+  const fileChosen = document.getElementById("file-chosen");
+  const btnUpload = document.getElementById("btn-do-upload");
+  const progressWrap = document.getElementById("progress-wrap");
+  const uploadStatus = document.getElementById("upload-status");
+  let chosenFile = null;
+
+  document.getElementById("btn-open-upload").addEventListener("click", () => {
+    modal.classList.add("show");
+    resetUpload();
+  });
+  document.getElementById("btn-cancel-upload").addEventListener("click", () => {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    modal.classList.remove("show");
+  });
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("show"); });
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault(); dropzone.classList.remove("dragover");
+    if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener("change", () => { if (fileInput.files.length) pickFile(fileInput.files[0]); });
+
+  function resetUpload() {
+    chosenFile = null; fileInput.value = "";
+    fileChosen.textContent = "";
+    btnUpload.disabled = true; btnUpload.textContent = "Upload";
+    progressWrap.classList.remove("show");
+    uploadStatus.textContent = ""; uploadStatus.className = "upload-status waiting";
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function pickFile(f) {
+    const ok = [".pdf", ".txt", ".md", ".docx"].some(ext => f.name.toLowerCase().endsWith(ext));
+    if (!ok) { uploadStatus.textContent = "❌ Type non supporté (PDF, TXT, MD, DOCX)"; uploadStatus.className = "upload-status err"; return; }
+    if (f.size > 50 * 1024 * 1024) { uploadStatus.textContent = "❌ Fichier trop volumineux (max 50MB)"; uploadStatus.className = "upload-status err"; return; }
+    chosenFile = f;
+    fileChosen.textContent = "📎 " + f.name + " (" + (f.size / 1024).toFixed(1) + " KB)";
+    btnUpload.disabled = false;
+    uploadStatus.textContent = ""; uploadStatus.className = "upload-status waiting";
+  }
+
+  function setStatus(text, cls) {
+    uploadStatus.textContent = text;
+    uploadStatus.className = "upload-status " + cls;
+  }
+
+  btnUpload.addEventListener("click", async () => {
+    if (!chosenFile) return;
+    btnUpload.disabled = true; btnUpload.textContent = "Uploading...";
+    progressWrap.classList.add("show");
+    try {
+      const fd = new FormData();
+      fd.append("file", chosenFile);
+      const data = await apiCall("/documents", { method: "POST", body: fd });
+      setBanner(false);
+      await loadDocs();
+      pollStatus(data.id);
+    } catch (e) {
+      progressWrap.classList.remove("show");
+      btnUpload.disabled = false; btnUpload.textContent = "Upload";
+      if (e.message === "network") { setBanner(true); return; }
+      if (e.message === "unauthorized") return;
+      setStatus("❌ Error: " + apiErrorMessage(e, "Upload failed."), "err");
+    }
+  });
+
+  function pollStatus(docId) {
+    const started = Date.now();
+    setStatus("Waiting...", "waiting");
+    pollTimer = setInterval(async () => {
+      if (Date.now() - started > 60000) {
+        clearInterval(pollTimer); pollTimer = null;
+        setStatus("❌ Timeout: indexing took too long.", "err");
+        btnUpload.disabled = false; btnUpload.textContent = "Upload";
+        return;
+      }
+      try {
+        const d = await apiCall("/documents/" + docId, { method: "GET" });
+        if (d.status === "queued") setStatus("Waiting...", "waiting");
+        else if (d.status === "processing") {
+          uploadStatus.innerHTML = "";
+          setStatus("Indexing...", "indexing");
+          if (!uploadStatus.querySelector(".spinner")) {
+            const sp = document.createElement("span");
+            sp.className = "spinner"; sp.style.borderColor = "var(--border)";
+            uploadStatus.prepend(sp); uploadStatus.prepend(document.createTextNode(" "));
+          }
+        }
+        else if (d.status === "indexed") {
+          clearInterval(pollTimer); pollTimer = null;
+          setStatus("✅ Ready!", "ready");
+          await loadDocs();
+          selectDoc(docId);
+          setTimeout(() => { modal.classList.remove("show"); resetUpload(); }, 800);
+        }
+        else if (d.status === "error") {
+          clearInterval(pollTimer); pollTimer = null;
+          setStatus("❌ Error: " + (d.error || "indexing failed"), "err");
+          btnUpload.disabled = false; btnUpload.textContent = "Upload";
+          await loadDocs();
+        }
+      } catch (e) {
+        if (e.message === "network") setBanner(true);
+      }
+    }, 2000);
+  }
+
+  loadDocs();
+})();
+</script>
+</body>
+</html>

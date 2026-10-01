@@ -27,3 +27,19 @@ class Document(SQLModel, table=True):
     n_pages: Optional[int] = Field(default=None)
     error: Optional[str] = Field(default=None, max_length=1024)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ChatMessage(SQLModel, table=True):
+    """Historique par utilisateur + par document. Isolation via user_id (JWT)."""
+
+    __tablename__ = "chat_messages"  # type: ignore
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    doc_id: str = Field(index=True, max_length=64)  # str(doc.uuid), pas de FK stricte
+    role: str = Field(max_length=8)  # user | bot
+    content: str = Field(max_length=8000)  # question ou réponse
+    sources_json: Optional[str] = Field(default=None, max_length=16000)
+    question_lang: Optional[str] = Field(default=None, max_length=8)
+    refused: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

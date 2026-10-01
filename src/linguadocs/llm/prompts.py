@@ -9,7 +9,8 @@ def _system_prompt(lang: str) -> str:
             "- اذكر المصادر على الشكل [اسم_الملف، صفحة X]\n"
             "- أجب بلغة السؤال (العربية)\n"
             '- إذا لم تكن الإجابة في السياق، قل فقط: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- لا تخترع معلومات"
+            "- لا تخترع معلومات\n"
+            "- أعط الإجابة النهائية مباشرة، دون وصف استدلالك أو منهجيتك"
         )
     if lang == "en":
         return (
@@ -18,7 +19,8 @@ def _system_prompt(lang: str) -> str:
             "- Cite sources as [filename, page X]\n"
             "- Answer in the language of the question (English)\n"
             '- If the answer is not in the context, say: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- Do NOT invent information"
+            "- Do NOT invent information\n"
+            "- Give the final answer DIRECTLY, without describing your reasoning or process"
         )
     # fr par défaut (et es -> on répond en français/ langue question mais prompt en français)
     if lang == "es":
@@ -28,19 +30,33 @@ def _system_prompt(lang: str) -> str:
             "- Cita fuentes como [nombre_archivo, página X]\n"
             "- Responde en el idioma de la pregunta (español)\n"
             '- Si la respuesta no está en el contexto, di: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- NO inventes información"
+            "- NO inventes información\n"
+            "- Da la respuesta final DIRECTAMENTE, sin describir tu razonamiento ni tu proceso"
         )
     return (
         "Tu es l'assistant LinguaDocs. Règles strictes :\n"
         "- Réponds UNIQUEMENT avec les informations du contexte fourni\n"
         "- Cite les sources : [nom_fichier, page X]\n"
         "- Réponds dans la langue de la question (français)\n"
-        '- Si la réponse n\'est pas dans le contexte : dis "Je ne trouve pas de réponse dans vos documents."\n'
-        "- NE PAS inventer d'informations"
+            '- Si la réponse n\'est pas dans le contexte : dis "Je ne trouve pas de réponse dans vos documents."\n'
+            "- NE PAS inventer d'informations\n"
+            "- Donne DIRECTEMENT la réponse finale, sans décrire ton raisonnement ni ta démarche"
     )
 
 
 def build_prompt(question: str, chunks: list[dict], question_lang: str) -> str:
+    system, user = build_messages(question, chunks, question_lang)
+    # le LLM ne reçoit jamais user_id
+    return f"{system}\n\n{user}"
+
+
+def build_messages(question: str, chunks: list[dict], question_lang: str) -> tuple[str, str]:
+    """Sépare system (règles) et user (contexte + question).
+
+    Utilisé par l'API /api/chat d'Ollama : le template de chat encadre
+    le system avec une autorité que le mode completion brut (/api/generate)
+    ne donne pas — c'est ce cadrage qui empêche qwen3 de raisonner à voix haute.
+    """
     system = _system_prompt(question_lang)
     # contexte numéroté
     ctx_lines = []
@@ -54,10 +70,12 @@ def build_prompt(question: str, chunks: list[dict], question_lang: str) -> str:
     context = "\n\n".join(ctx_lines) if ctx_lines else "(aucun contexte)"
 
     # le LLM ne reçoit jamais user_id
-    prompt = (
-        f"{system}\n\n"
+    # Rappel final placé juste avant la réponse (effet de récence).
+    user = (
         f"Contexte:\n{context}\n\n"
         f"Question ({question_lang}): {question}\n"
+        f"RAPPEL FINAL : commence immédiatement par la réponse elle-même. "
+        f"Aucun préambule, aucun raisonnement visible, aucune analyse des sources. "
         f"Réponse:"
     )
-    return prompt
+    return system, user

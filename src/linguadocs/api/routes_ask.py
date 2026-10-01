@@ -9,8 +9,10 @@ from pydantic import BaseModel
 from linguadocs.api.auth import current_user
 from linguadocs.api.models import User
 from linguadocs.ingest.language import detect_lang, normalize
-from linguadocs.llm.client import generate, generate_stream
-from linguadocs.llm.prompts import build_prompt
+from linguadocs.llm.client import generate_chat as _generate_chat
+from linguadocs.llm.client import generate_chat_stream as _generate_chat_stream
+from linguadocs.llm.client import strip_thinking
+from linguadocs.llm.prompts import build_messages
 from linguadocs.retrieval.retrieval import rerank, search, search_hybrid
 from linguadocs.retrieval.retrieval import search_sparse as search_sparse_fn
 from linguadocs.settings import settings
@@ -18,6 +20,14 @@ from linguadocs.settings import settings
 router = APIRouter(prefix="/ask", tags=["ask"])
 
 NOT_FOUND = "Je ne trouve pas de réponse dans vos documents."
+
+# Alias public (utilisé par le code ci-dessous) :
+# - generate / generate_stream = noms patchés par les tests existants
+# - generate_chat / generate_chat_stream = noms réels
+generate = _generate_chat
+generate_chat = _generate_chat
+generate_stream = _generate_chat_stream
+generate_chat_stream = _generate_chat_stream
 
 
 class AskRequest(BaseModel):
@@ -67,7 +77,20 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
         }
 
     # d. refus si score < seuil (réglable settings.refusal_threshold)
-    best = max((getattr(h, "score", 0) or 0) for h in hits) if hits else 0
+    # Échelles incompatibles : dense=cosinus ~0-1, RRF natif Qdrant ~0.016-0.033.
+    # Le chunking reste générique 400 mots (aucune règle par titre de doc).
+    # Pour hybrid/sparse on juge le refus sur le score dense (cosinus),
+    # pas sur le score RRF qui ne discrimine pas le hors-domaine.
+    if mode == "dense":
+        best = max((getattr(h, "score", 0) or 0) for h in hits) if hits else 0
+    elif mode == "hybrid":
+        try:
+            _dense_check = search(str(user.id), norm_q, k=3)
+            best = max((getattr(h, "score", 0) or 0) for h in _dense_check) if _dense_check else 0
+        except Exception:
+            best = 1.0  # si le check échoue, ne pas bloquer hybrid
+    else:  # sparse : pas de seuil pré-rerank fiable
+        best = 1.0
     if best < settings.refusal_threshold:
         total = int((time.perf_counter() - t0) * 1000)
         return {
@@ -110,17 +133,22 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
             "latency_ms": {"retrieve": t_retrieve, "rerank": t_rerank, "generate": 0, "total": total},
         }
 
-    # e. build_prompt (LLM ne reçoit jamais user_id)
-    prompt = build_prompt(question_raw, chunks_for_prompt, question_lang)
+    # e. build messages (rôles system/user séparés pour /api/chat ;
+    #    LLM ne reçoit jamais user_id)
+    system, user = build_messages(question_raw, chunks_for_prompt, question_lang)
 
     # f. generate / stream
     if payload.stream:
         async def event_gen():
-            # en-tête SSE avec sources d'abord
-            yield f"data: {json.dumps({'sources': sources, 'question_lang': question_lang, 'refused': False}, ensure_ascii=False)}\n\n"
+            # en-tête SSE avec sources d'abord + temps déjà mesurés
+            # (le front affichait retrieve 0ms / generate 0ms car il les fabriquait)
+            yield f"data: {json.dumps({'sources': sources, 'question_lang': question_lang, 'refused': False, 'latency_ms': {'retrieve': t_retrieve, 'rerank': t_rerank, 'generate': 0, 'total': 0}}, ensure_ascii=False)}\n\n"
             t_gen_start = time.perf_counter()
-            async for token in generate_stream(prompt):
+            async for token in generate_stream(system, user):
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            t_gen = int((time.perf_counter() - t_gen_start) * 1000)
+            total = int((time.perf_counter() - t0) * 1000)
+            yield f"data: {json.dumps({'latency_ms': {'retrieve': t_retrieve, 'rerank': t_rerank, 'generate': t_gen, 'total': total}}, ensure_ascii=False)}\n\n"
             # on pourrait envoyer latency à la fin
             yield "data: [DONE]\n\n"
 
@@ -128,7 +156,8 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
 
     # non-stream
     t_gen_start = time.perf_counter()
-    answer = await generate(prompt)
+    answer = await generate(system, user)
+    answer = strip_thinking(answer)
     t_gen = int((time.perf_counter() - t_gen_start) * 1000)
     total = int((time.perf_counter() - t0) * 1000)
     return {

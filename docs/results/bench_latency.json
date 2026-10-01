@@ -1,0 +1,15 @@
+{
+  "1. PDF parsing (pdfplumber)": 1178.5,
+  "2. Chunking (400 tokens, overlap 50)": 2.3,
+  "3. Detection de langue (lingua)": 108.1,
+  "4. Normalisation texte": 0.1,
+  "5. Embedding dense (e5-small, tous chunks)": 3118.5,
+  "6. Indexation Qdrant (tous chunks)": 5833.5,
+  "7. Vector search dense (k=5)": 91.9,
+  "8. Vector search hybrid RRF (k=5)": 78.3,
+  "8b. Rerank cross-encoder (top_n=3)": 13704.2,
+  "9. Construction du prompt": 0.0,
+  "10. LLM time to first token (qwen3:4b)": 119923.3,
+  "11. LLM generation complete (50 tokens)": 16826.4,
+  "12. Pipeline end-to-end (detect->search->rerank->generate)": 94412.4
+}

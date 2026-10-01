@@ -29,6 +29,7 @@ def chunk_pages(
     overlap: int = 50,
     doc_title: str = "",
 ) -> list[dict]:
+    """Découpe en chunks de `chunk_size` mots (whitespace) avec chevauchement."""
     chunks: list[dict] = []
     current_tokens: list[str] = []
     current_page: int | None = None

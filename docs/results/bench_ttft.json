@@ -1,0 +1,17 @@
+{
+  "Test A (top_n=5, complet)": {
+    "prompt_chars": 13083,
+    "top_n": 5,
+    "ttft_ms": 193697.4
+  },
+  "Test B (top_n=3, complet)": {
+    "prompt_chars": 8001,
+    "top_n": 3,
+    "ttft_ms": 6362.3
+  },
+  "Test C (top_n=3, tronque)": {
+    "prompt_chars": 4099,
+    "top_n": 3,
+    "ttft_ms": 37253.8
+  }
+}
