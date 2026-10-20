@@ -12,6 +12,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from linguadocs.main import app
 from linguadocs.api.database import get_session
 
+# Les tests ne doivent JAMAIS écrire dans la collection Qdrant de l'app
+# ("chunks") : ils utilisent une collection dédiée, supprimable sans risque.
+import linguadocs.retrieval.retrieval as _retrieval
+
+_retrieval.COL = "chunks_test"
+
 # SQLite en mémoire partagée pour les tests (pas PostgreSQL)
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -41,7 +47,6 @@ async def _drop_tables():
         await conn.run_sync(SQLModel.metadata.drop_all)
 
 
-# créer les tables une fois au chargement
 asyncio.run(_create_tables())
 
 
@@ -50,7 +55,6 @@ async def get_test_session():
         yield session
 
 
-# override FastAPI dependency
 app.dependency_overrides[get_session] = get_test_session
 
 

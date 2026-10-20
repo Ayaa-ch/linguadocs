@@ -3,7 +3,6 @@ import time
 
 
 def test_isolation_alice_bob(client):
-    # créer alice et bob
     email_alice = f"alice_{uuid.uuid4().hex[:8]}@test.com"
     r = client.post("/auth/register", json={"email": email_alice, "password": "AlicePass123"})
     assert r.status_code == 201
@@ -14,11 +13,9 @@ def test_isolation_alice_bob(client):
     assert r.status_code == 201
     token_bob = r.json()["access_token"]
 
-    # phrase unique secrète
     secret = f"PHRASE_SECRETE_{uuid.uuid4().hex}_ALICE"
     alice_content = f"Ceci est le document d'Alice. {secret} Ne pas divulguer.".encode("utf-8")
 
-    # alice uploade TXT
     r = client.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_alice}"},
@@ -27,7 +24,6 @@ def test_isolation_alice_bob(client):
     assert r.status_code == 201, r.text
     doc_id = r.json()["id"]
 
-    # attendre indexed (polling)
     for _ in range(20):
         r = client.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_alice}"})
         assert r.status_code == 200
@@ -92,7 +88,6 @@ def test_search_sans_user_id_leve_typeerror():
         assert "user_id" in str(e).lower()
 
     try:
-        # appel sans user_id du tout
         search(query="hello", k=5)  # type: ignore
         assert False, "search sans user_id devrait lever TypeError"
     except TypeError:

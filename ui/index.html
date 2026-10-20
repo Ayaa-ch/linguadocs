@@ -1,169 +1,141 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>LinguaDocs — Login</title>
+<title>LinguaDocs â€” Multilingual Local RAG Assistant</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css?v=2.5" />
 </head>
-<body>
-<div id="api-banner" class="api-banner">⚠️ Cannot connect to API (port 8000). Make sure the server is running.</div>
-<div class="auth-wrapper">
-  <div class="auth-card">
-    <div class="auth-logo">📚 LinguaDocs</div>
-    <div class="auth-subtitle">Your multilingual document assistant</div>
+<body class="landing">
+<div id="api-banner" class="api-banner"><svg class="lucide" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Cannot connect to API (port 8000). Make sure the server is running.</div>
+<div class="auth-glow" aria-hidden="true"></div>
 
-    <div class="tabs">
-      <button id="tab-login" class="tab active" type="button">Login</button>
-      <button id="tab-register" class="tab" type="button">Register</button>
+<!-- ============================== NAVBAR ============================== -->
+<header class="topnav landing-nav">
+  <div class="brand">
+    <img src="assets/logo.png" alt="LinguaDocs" class="brand-logo" width="28" height="28" style="width:28px;height:28px;" />
+    <div>
+      <div class="brand-line">
+        <span class="brand-title" data-i18n="app_title">LinguaDocs</span>
+      </div>
+      <div class="brand-sub" data-i18n="app_tagline">Multilingual Local RAG Document Assistant</div>
+    </div>
+  </div>
+  <div class="nav-controls">
+    <select id="lang-select" class="lang-select" aria-label="Language">
+      <option value="en">English (EN)</option>
+      <option value="fr">FranÃ§ais (FR)</option>
+      <option value="es">EspaÃ±ol (ES)</option>
+      <option value="ar">Ø§Ù„Ø¹Ø±Ø¨ÙŠØ© (AR)</option>
+    </select>
+    <button id="theme-toggle" class="icon-btn" type="button" title="Theme"><svg class="lucide" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+  </div>
+</header>
+
+<main class="landing-main">
+  <!-- ============================== HERO ============================== -->
+  <section class="landing-hero">
+    <h1 class="font-heading hero-title">
+      <span data-i18n="hero_meet">Meet</span>
+      <span class="hero-brand" data-i18n="hero_name">LinguaDocs</span><span data-i18n="hero_suffix">, your document AI.</span>
+    </h1>
+    <p class="hero-desc" data-i18n="hero_desc">LinguaDocs reads through your PDFs, contracts, and research notes, answering questions with exact citations, generating quizzes, and summarizing content.</p>
+  </section>
+
+  <!-- ================== [LOGIN CARD] [IMAGE DROITE] ================== -->
+  <section class="login-stage">
+    <img src="assets/image.jpg" alt="Decoration gauche" class="login-decor login-decor-left" />
+    
+    <div class="auth-card landing-card">
+      <div class="auth-tabs">
+        <button id="tab-login" type="button" class="active">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21 2-2 2m-7.6 7.6a5 5 0 1 1-7-7 5 5 0 0 1 7 7Zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+          <span data-i18n="auth_login_tab">Sign In</span>
+        </button>
+        <button id="tab-register" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+          <span data-i18n="auth_register_tab">Create Account</span>
+        </button>
+      </div>
+
+      <div id="auth-alert" class="alert err hidden"></div>
+      <div id="auth-ok" class="alert ok hidden"></div>
+
+      <form id="form-login" autocomplete="on">
+        <div class="form-row">
+          <label class="label" for="login-email" data-i18n="auth_email">Email Address</label>
+          <div class="input-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
+            <input id="login-email" class="input" type="email" data-i18n-ph="auth_email_placeholder" placeholder="you@domain.com" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="label" for="login-password" data-i18n="auth_password">Password</label>
+          <div class="input-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input id="login-password" class="input" type="password" placeholder="" required />
+          </div>
+        </div>
+        <button id="btn-login" class="btn btn-primary btn-block" type="submit" data-i18n="auth_btn_login">Sign In to LinguaDocs</button>
+      </form>
+
+      <form id="form-register" class="hidden" autocomplete="on">
+        <div class="form-row">
+          <label class="label" for="reg-email" data-i18n="auth_email">Email Address</label>
+          <div class="input-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
+            <input id="reg-email" class="input" type="email" data-i18n-ph="auth_email_placeholder" placeholder="you@domain.com" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="label" for="reg-password" data-i18n="auth_password">Password</label>
+          <input id="reg-password" class="input" type="password" placeholder="" required />
+          <p class="label hint" data-i18n="auth_password_hint">Must be at least 8 characters.</p>
+        </div>
+        <div class="form-row">
+          <label class="label" for="reg-confirm" data-i18n="auth_password_confirm">Confirm Password</label>
+          <input id="reg-confirm" class="input" type="password" placeholder="" required />
+        </div>
+        <button id="btn-register" class="btn btn-primary btn-block" type="submit" data-i18n="auth_btn_register">Create Free Account</button>
+      </form>
     </div>
 
-    <!-- LOGIN -->
-    <form id="form-login" autocomplete="on">
-      <div class="form-group">
-        <label for="login-email">Email</label>
-        <input id="login-email" type="email" placeholder="you@example.com" required />
-      </div>
-      <div class="form-group">
-        <label for="login-password">Password</label>
-        <input id="login-password" type="password" placeholder="••••••••" required />
-      </div>
-      <button class="btn" type="submit" id="btn-login">Login</button>
-    </form>
+    <img src="assets/second.png" alt="Decoration droite" class="login-decor login-decor-right" />
 
-    <!-- REGISTER -->
-    <form id="form-register" style="display:none" autocomplete="on">
-      <div class="form-group">
-        <label for="reg-email">Email</label>
-        <input id="reg-email" type="email" placeholder="you@example.com" required />
-      </div>
-      <div class="form-group">
-        <label for="reg-password">Password</label>
-        <input id="reg-password" type="password" placeholder="Min 8 characters" required />
-      </div>
-      <div class="form-group">
-        <label for="reg-confirm">Confirm Password</label>
-        <input id="reg-confirm" type="password" placeholder="Repeat password" required />
-      </div>
-      <button class="btn" type="submit" id="btn-register">Create Account</button>
-    </form>
+  </section>
 
-    <div id="form-msg" class="form-msg"></div>
-  </div>
-</div>
+  <!-- ========================= FEATURES (scroll) ========================= -->
+  <section class="features">
+    <h2 class="font-heading features-title" data-i18n="features_title">Everything already built inside</h2>
+    <p class="features-sub" data-i18n="features_sub">A full local RAG workspace â€” no cloud, no subscription.</p>
+    <div class="features-grid">
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div><h3 data-i18n="feat_docs_title">Upload &amp; vectorize</h3><p data-i18n="feat_docs_desc">PDF, TXT, Markdown and DOCX up to 50MB, chunked and embedded into your local Qdrant database.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><h3 data-i18n="feat_chat_title">Grounded chat</h3><p data-i18n="feat_chat_desc">Streaming answers with page-level citations, refusal banner when evidence is weak, stop button.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div><h3 data-i18n="feat_viewer_title">Document inspector</h3><p data-i18n="feat_viewer_desc">Click any citation to open the source page with the exact chunk highlighted.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg></div><h3 data-i18n="feat_summary_title">Summaries</h3><p data-i18n="feat_summary_desc">Short, medium or long synthesis of the whole document or a chosen page range.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></div><h3 data-i18n="feat_quiz_title">Interactive quiz</h3><p data-i18n="feat_quiz_desc">Multiple-choice questions generated from your document, with scoring and explanations.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></div><h3 data-i18n="feat_flash_title">Flashcards</h3><p data-i18n="feat_flash_desc">Flip through study cards, track what you know and what needs review.</p></div>
+      <div class="feature-card"><div class="feature-icon">RTL</div><h3 data-i18n="feat_langs_title">4 languages, RTL</h3><p data-i18n="feat_langs_desc">Full interface in EN / FR / ES / AR with right-to-left support for Arabic.</p></div>
+      <div class="feature-card"><div class="feature-icon"><svg class="lucide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div><h3 data-i18n="feat_local_title">Local &amp; private</h3><p data-i18n="feat_local_desc">Ollama LLM, BGE-m3 embeddings and Qdrant run on your machine. Your documents never leave.</p></div>
+    </div>
 
-<script src="app.js"></script>
-<script>
-(function () {
-  const { isEmailValid, apiErrorMessage, TOKEN_KEY } = window.LD;
-  const API = window.LD.API_BASE;
-  const tabLogin = document.getElementById("tab-login");
-  const tabReg = document.getElementById("tab-register");
-  const formLogin = document.getElementById("form-login");
-  const formReg = document.getElementById("form-register");
-  const msg = document.getElementById("form-msg");
-  const banner = document.getElementById("api-banner");
+  </section>
+</main>
 
-  if (localStorage.getItem(TOKEN_KEY)) { window.location.href = "dashboard.html"; }
+<footer class="landing-footer">
+  <span>LinguaDocs Â· Ollama qwen2.5 Â· BGE-m3 Â· Qdrant</span>
+  <span data-i18n="app_tagline">Multilingual Local RAG Document Assistant</span>
+</footer>
 
-  function setTab(which) {
-    const isLogin = which === "login";
-    tabLogin.classList.toggle("active", isLogin);
-    tabReg.classList.toggle("active", !isLogin);
-    formLogin.style.display = isLogin ? "" : "none";
-    formReg.style.display = isLogin ? "none" : "";
-    msg.textContent = ""; msg.className = "form-msg";
-  }
-  tabLogin.addEventListener("click", () => setTab("login"));
-  tabReg.addEventListener("click", () => setTab("register"));
-
-  function showMsg(text, kind) {
-    msg.textContent = text;
-    msg.className = "form-msg " + kind;
-  }
-
-  formReg.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = document.getElementById("reg-email").value.trim().toLowerCase();
-    const pw = document.getElementById("reg-password").value;
-    const confirm = document.getElementById("reg-confirm").value;
-    if (!isEmailValid(email)) { showMsg("Please enter a valid email address.", "error"); return; }
-    if (pw.length < 8) { showMsg("Password must be at least 8 characters.", "error"); return; }
-    if (pw !== confirm) { showMsg("Passwords do not match.", "error"); return; }
-    const btn = document.getElementById("btn-register");
-    btn.disabled = true; btn.textContent = "Creating...";
-    try {
-      const res = await fetch(API + "/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pw })
-      });
-      if (res.status === 201) {
-        banner.classList.remove("show");
-        showMsg("Account created! Please login.", "success");
-        formReg.reset();
-        setTimeout(() => setTab("login"), 800);
-      } else if (res.status === 400) {
-        let detail = "";
-        try { const j = await res.json(); detail = j.detail || ""; } catch (_) {}
-        if (/utilis|already|existe/i.test(detail)) {
-          showMsg("This email is already registered. Please login.", "error");
-        } else {
-          showMsg(detail || "Email already registered", "error");
-        }
-      } else {
-        const err = new Error("http"); err.status = res.status;
-        try { err.data = await res.json(); } catch (_) {}
-        showMsg(apiErrorMessage(err, "Registration failed."), "error");
-      }
-    } catch (ex) {
-      banner.classList.add("show");
-      showMsg("Cannot connect to API (port 8000). Make sure the server is running.", "error");
-    } finally {
-      btn.disabled = false; btn.textContent = "Create Account";
-    }
-  });
-
-  formLogin.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = document.getElementById("login-email").value.trim().toLowerCase();
-    const pw = document.getElementById("login-password").value;
-    if (!isEmailValid(email)) { showMsg("Please enter a valid email address.", "error"); return; }
-    if (!pw) { showMsg("Please enter your password.", "error"); return; }
-    const btn = document.getElementById("btn-login");
-    btn.disabled = true; btn.textContent = "Logging in...";
-    try {
-      const res = await fetch(API + "/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pw })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem(TOKEN_KEY, data.access_token);
-        try {
-          const payload = JSON.parse(atob(data.access_token.split(".")[1]));
-          if (payload.sub) localStorage.setItem("linguadocs_email", email);
-        } catch (_) { localStorage.setItem("linguadocs_email", email); }
-        banner.classList.remove("show");
-        window.location.href = "dashboard.html";
-      } else if (res.status === 401) {
-        showMsg("Invalid email or password", "error");
-      } else {
-        const err = new Error("http"); err.status = res.status;
-        try { err.data = await res.json(); } catch (_) {}
-        showMsg(apiErrorMessage(err, "Login failed."), "error");
-      }
-    } catch (ex) {
-      banner.classList.add("show");
-      showMsg("Cannot connect to API (port 8000). Make sure the server is running.", "error");
-    } finally {
-      btn.disabled = false; btn.textContent = "Login";
-    }
-  });
-})();
-</script>
+<script src="js/i18n.js"></script>
+<script src="js/api.js"></script>
+<script src="js/auth.js"></script>
 </body>
 </html>
+
+
+
+

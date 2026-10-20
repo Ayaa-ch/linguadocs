@@ -83,13 +83,11 @@ def test_get_documents_isolation(client):
     token_a = _register_and_token(client)
     token_b = _register_and_token(client)
 
-    # alice upload
     client.post(
         "/documents",
         headers=_auth(token_a),
         files={"file": ("alice.txt", b"alice only doc", "text/plain")},
     )
-    # bob upload
     client.post(
         "/documents",
         headers=_auth(token_b),

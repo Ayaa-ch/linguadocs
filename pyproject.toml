@@ -45,3 +45,6 @@ dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
 ]
+ui = [
+    "streamlit>=1.40.0",
+]

@@ -5,26 +5,23 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from linguadocs.retrieval.dense import init as qdrant_init, index as qdrant_index
+from linguadocs.retrieval.retrieval import RerankerUnavailableError
 from linguadocs.ingest.language import detect_lang
 
 
 @pytest.fixture
 def indexed_user(client):
-    # crée un utilisateur et indexe 3 passages FR/EN/AR
     email = f"ask_{uuid.uuid4().hex[:8]}@test.com"
     r = client.post("/auth/register", json={"email": email, "password": "AskPass123"})
     assert r.status_code == 201
     token = r.json()["access_token"]
-    # décoder user_id
     import jwt
     from linguadocs.settings import settings
 
     payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     user_id = payload["sub"]
 
-    # init Qdrant
     qdrant_init(reset=False)
-    # 3 passages
     items = [
         {
             "text": "La Charte des Nations Unies a été signée à San Francisco en 1945. Elle établit les principes de l'égalité souveraine.",
@@ -49,7 +46,6 @@ def indexed_user(client):
         },
     ]
     qdrant_index(user_id, items)
-    # petite pause pour indexation
     time.sleep(0.5)
     return {"token": token, "user_id": user_id, "client": client}
 
@@ -57,7 +53,6 @@ def indexed_user(client):
 def test_ask_francais(indexed_user):
     client = indexed_user["client"]
     token = indexed_user["token"]
-    # mock LLM
     with patch("linguadocs.api.routes_ask.generate", new=AsyncMock(return_value="La Charte a été signée à San Francisco en 1945. [charte.pdf, page 1]")) as mock_gen:
         r = client.post(
             "/ask",
@@ -89,7 +84,6 @@ def test_ask_anglais(indexed_user):
         data = r.json()
         assert not data["refused"]
         assert data["question_lang"] == "en"
-        # lingua vérification
         assert detect_lang("Where was the UN Charter signed ?") == "en"
 
 
@@ -136,7 +130,7 @@ def test_ask_stream(indexed_user):
     client = indexed_user["client"]
     token = indexed_user["token"]
 
-    async def fake_stream(prompt, model="qwen3:4b"):
+    async def fake_stream(prompt, model="qwen2.5:3b-instruct"):
         for tok in ["La ", "Charte ", "a ", "été ", "signée."]:
             yield tok
 
@@ -147,10 +141,41 @@ def test_ask_stream(indexed_user):
             json={"question": "Où a été signée la Charte ?", "stream": True},
         )
         assert r.status_code == 200
-        # SSE
         assert "text/event-stream" in r.headers.get("content-type", "")
         body = r.text
         assert "data:" in body
         assert "sources" in body or "token" in body
         # vérifier que le stream contient des tokens
         assert "La " in body or "Charte" in body
+
+
+def test_ask_reranker_indisponible_503(indexed_user):
+    """Reranker indisponible -> 503 explicite (jamais 500), en non-stream ET en stream.
+
+    Le rerank précède le branchement SSE : les deux modes doivent remonter
+    le même HTTP 503 avec le message de RerankerUnavailableError.
+    """
+    client = indexed_user["client"]
+    token = indexed_user["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    body = {"question": "Où a été signée la Charte des Nations Unies ?", "stream": False}
+
+    unavailable = RerankerUnavailableError(
+        "reranker indisponible : mémoire insuffisante ou chargement échoué (test simulé)"
+    )
+
+    with patch("linguadocs.api.routes_ask.rerank", side_effect=unavailable):
+        # --- mode non-stream ---
+        r = client.post("/ask", headers=headers, json=body)
+        assert r.status_code == 503, r.text
+        detail = r.json()["detail"]
+        assert "reranker indisponible" in detail
+        assert "Internal Server Error" not in detail
+
+        # --- mode stream ---
+        r2 = client.post("/ask", headers=headers, json={**body, "stream": True})
+        assert r2.status_code == 503, r2.text
+        detail2 = r2.json()["detail"]
+        assert "reranker indisponible" in detail2
+        # aucune réponse SSE ne doit démarrer
+        assert "text/event-stream" not in r2.headers.get("content-type", "")

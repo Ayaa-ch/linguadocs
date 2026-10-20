@@ -18,7 +18,8 @@ logger = logging.getLogger("linguadocs.llm")
 # le template de chat fait respecter les règles système à qwen3,
 # qui sinon raisonne à voix haute dans sa réponse malgré think:false.
 OLLAMA_URL = "http://localhost:11434/api/chat"
-TIMEOUT = 120.0
+# connect/write/pool 10s, read/génération lente 300s (qwen CPU ~70-120s)
+TIMEOUT = httpx.Timeout(10.0, read=300.0)
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think.*?>", re.IGNORECASE)
@@ -68,8 +69,8 @@ def _payload(prompt: str, model: str, stream: bool) -> dict:
         "messages": messages,
         "stream": stream,
         "think": False,
-        # -1 = garder le modèle chargé en RAM après la requête (pas de déchargement)
-        "keep_alive": settings.ollama_keep_alive,
+        # 30m = garde le modèle chargé en RAM 30 min (pas de reload à chaque question)
+        "keep_alive": "30m",
         # temperature 0 = réponse déterministe et concise (pas de divagation)
         "options": {"num_predict": settings.llm_num_predict, "temperature": 0},
     }

@@ -7,7 +7,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from linguadocs.settings import settings
 
-# asyncpg engine
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
     echo=False,

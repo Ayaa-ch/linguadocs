@@ -1,46 +1,23 @@
 from __future__ import annotations
 
 
-def _system_prompt(lang: str) -> str:
-    if lang == "ar":
-        return (
-            "أنت مساعد LinguaDocs. اتبع القواعد التالية بدقة:\n"
-            "- أجب فقط باستخدام المعلومات الموجودة في السياق المقدم\n"
-            "- اذكر المصادر على الشكل [اسم_الملف، صفحة X]\n"
-            "- أجب بلغة السؤال (العربية)\n"
-            '- إذا لم تكن الإجابة في السياق، قل فقط: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- لا تخترع معلومات\n"
-            "- أعط الإجابة النهائية مباشرة، دون وصف استدلالك أو منهجيتك"
-        )
-    if lang == "en":
-        return (
-            "You are LinguaDocs assistant. Follow strictly:\n"
-            "- Answer ONLY using the provided context\n"
-            "- Cite sources as [filename, page X]\n"
-            "- Answer in the language of the question (English)\n"
-            '- If the answer is not in the context, say: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- Do NOT invent information\n"
-            "- Give the final answer DIRECTLY, without describing your reasoning or process"
-        )
-    # fr par défaut (et es -> on répond en français/ langue question mais prompt en français)
-    if lang == "es":
-        return (
-            "Eres asistente LinguaDocs. Sigue estrictamente:\n"
-            "- Responde SOLO con la información del contexto proporcionado\n"
-            "- Cita fuentes como [nombre_archivo, página X]\n"
-            "- Responde en el idioma de la pregunta (español)\n"
-            '- Si la respuesta no está en el contexto, di: "Je ne trouve pas de réponse dans vos documents."\n'
-            "- NO inventes información\n"
-            "- Da la respuesta final DIRECTAMENTE, sin describir tu razonamiento ni tu proceso"
-        )
+def _system_prompt(lang: str | None = None) -> str:
+    # Prompt unique multilingue : plus de routage par langue.
+    # `lang` gardé pour compatibilité mais ignoré.
+    # Le cross-lingue est géré par les embeddings, la réponse suit la langue de la question.
     return (
-        "Tu es l'assistant LinguaDocs. Règles strictes :\n"
-        "- Réponds UNIQUEMENT avec les informations du contexte fourni\n"
-        "- Cite les sources : [nom_fichier, page X]\n"
-        "- Réponds dans la langue de la question (français)\n"
-            '- Si la réponse n\'est pas dans le contexte : dis "Je ne trouve pas de réponse dans vos documents."\n'
-            "- NE PAS inventer d'informations\n"
-            "- Donne DIRECTEMENT la réponse finale, sans décrire ton raisonnement ni ta démarche"
+        "You are LinguaDocs assistant. Follow strictly:\n"
+        "- Answer ONLY using the provided context\n"
+        "- Cite sources as [filename, page X]\n"
+        "- Answer in the language of the question (same language the user used)\n"
+        '- If the answer is not in the context, say: "Je ne trouve pas de réponse dans vos documents."\n'
+        "- Do NOT invent information\n"
+        "- Give the final answer DIRECTLY, without describing your reasoning or process\n"
+        "- Never use emojis in your responses\n"
+        "- N'utilise jamais d'emojis dans tes reponses\n"
+        '- If the context contains NO information related to the question, say: "Je ne trouve pas de réponse dans vos documents."\n'
+        "- Otherwise, answer at best by synthesising or deducing from the context, even if the question wording differs\n"
+        "- The context may be in another language than the question: translate and answer in the question language"
     )
 
 
@@ -58,7 +35,6 @@ def build_messages(question: str, chunks: list[dict], question_lang: str) -> tup
     ne donne pas — c'est ce cadrage qui empêche qwen3 de raisonner à voix haute.
     """
     system = _system_prompt(question_lang)
-    # contexte numéroté
     ctx_lines = []
     for i, ch in enumerate(chunks, 1):
         fname = ch.get("filename") or ch.get("doc_title") or "doc"

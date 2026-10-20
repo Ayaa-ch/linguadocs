@@ -4,7 +4,6 @@ import re
 import unicodedata
 
 
-# cache detector
 _detector = None
 
 
@@ -32,7 +31,6 @@ def detect_lang(text: str) -> str:
             mapping = {"ARABIC": "ar", "FRENCH": "fr", "ENGLISH": "en", "SPANISH": "es"}
             if name in mapping:
                 return mapping[name]
-            # fallback via iso
             try:
                 iso = best.language.iso_code_639_1().name.lower()  # type: ignore
                 if iso in ("ar", "fr", "en", "es"):
@@ -57,21 +55,19 @@ def _normalize_arabic(text: str) -> str:
     text = text.replace(_AR_TATWEEL, "")
     # unifier alef: إ أ آ -> ا
     text = re.sub("[\u0622\u0623\u0625]", "\u0627", text)
-    # unifier ya: ي ى -> ي (garde ي), mais on unifie ى -> ي
-    # text = text.replace("\u0649", "\u064A")
-    # unifier ta marbuta? on laisse
     return text
 
 
-def normalize(text: str, lang: str) -> str:
-    # NFKC unicode
+def normalize(text: str, lang: str | None = None) -> str:
+    # Normalisation unique, sans routage par langue (embeddings multilingues).
+    # `lang` gardé en param optionnel pour compatibilité, mais ignoré :
+    # la normalisation arabe est sûre sur texte non-arabe (ne touche que U+0600-U+06FF).
     text = unicodedata.normalize("NFKC", text)
-    # espaces multiples
     text = re.sub(r"\s+", " ", text).strip()
 
-    if lang == "ar":
-        text = _normalize_arabic(text)
-        # re-normalize espaces après suppression diacritiques
-        text = re.sub(r"\s+", " ", text).strip()
+    # Toujours appliquée (idempotente hors arabe)
+    text = _normalize_arabic(text)
+    # re-normalize espaces après suppression diacritiques
+    text = re.sub(r"\s+", " ", text).strip()
 
     return text

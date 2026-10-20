@@ -45,7 +45,6 @@ def _detect_mime(content: bytes, filename: str) -> str:
             return EXT_TO_MIME[ext]
         return mime
     except Exception:
-        # fallback by extension
         ext = Path(filename).suffix.lower()
         return EXT_TO_MIME.get(ext, "application/octet-stream")
 
@@ -81,7 +80,6 @@ async def upload_document(
             detail=f"Extension non supportée: {ext} (autorisé: .pdf, .txt, .md, .docx)",
         )
 
-    # detect real mime via python-magic
     mime = _detect_mime(content, file.filename)
     # si magic dit octet-stream mais extension est valide -> on fait confiance à l'extension
     if mime not in ALLOWED:
@@ -107,7 +105,6 @@ async def upload_document(
     if doc_type not in ("pdf", "txt", "md", "docx"):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"Type non supporté: {doc_type}")
 
-    # create doc row
     doc = Document(
         user_id=user.id,
         filename=file.filename,
@@ -119,10 +116,8 @@ async def upload_document(
     await session.commit()
     await session.refresh(doc)
 
-    # save to data/users/<user_id>/<doc_id>/
     save_dir = Path(settings.data_dir) / str(user.id) / str(doc.id)
     save_dir.mkdir(parents=True, exist_ok=True)
-    # sanitize filename
     safe_name = Path(file.filename).name
     save_path = save_dir / safe_name
     save_path.write_bytes(content)
@@ -194,6 +189,71 @@ async def get_document(
     }
 
 
+@router.get("/{doc_id}/chunks")
+async def get_document_chunks(
+    doc_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Chunks indexés du document, en ordre (texte normalisé = celui vu par le LLM).
+
+    Utilisé par le viewer latéral pour surligner le passage source exact.
+    """
+    result = await session.exec(select(Document).where(Document.id == doc_id, Document.user_id == user.id))
+    doc = result.first()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document introuvable")
+    try:
+        from linguadocs.retrieval.retrieval import get_doc_chunks
+
+        chunks = get_doc_chunks(str(user.id), str(doc.id))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Qdrant indisponible: {e}")
+    return [
+        {
+            "chunk_key": c.get("chunk_key"),
+            "text": c.get("text"),
+            "page": c.get("page"),
+            "lang": c.get("lang"),
+        }
+        for c in chunks
+    ]
+
+
+@router.get("/{doc_id}/pages")
+async def get_document_pages(
+    doc_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Pages du document tel qu'uploadé, en ordre (re-parse du fichier stocké).
+
+    Contrairement aux chunks (fenêtres de 400 mots pouvant chevaucher
+    2 pages), ici chaque entrée = une vraie page physique (PDF) ou le
+    contenu tel quel (TXT/MD/DOCX). Utilisé par l'onglet Pages du viewer.
+    Aucun impact sur l'indexation.
+    """
+    result = await session.exec(select(Document).where(Document.id == doc_id, Document.user_id == user.id))
+    doc = result.first()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document introuvable")
+    save_path = Path(settings.data_dir) / str(user.id) / str(doc.id) / Path(doc.filename).name
+    if not save_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fichier introuvable sur disque")
+    try:
+        from linguadocs.ingest.parsers import parse
+
+        pages = parse(save_path)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    return {
+        "id": str(doc.id),
+        "filename": doc.filename,
+        "doc_type": doc.doc_type,
+        "pages": [{"page": p.page_number, "text": p.text} for p in pages],
+    }
+
+
 @router.delete("/{doc_id}")
 async def delete_document(
     doc_id: uuid.UUID,
@@ -219,7 +279,6 @@ async def delete_document(
         # do not fail deletion if Qdrant not reachable
         pass
 
-    # delete file on disk
     save_dir = Path(settings.data_dir) / str(user.id) / str(doc.id)
     if save_dir.exists():
         shutil.rmtree(save_dir, ignore_errors=True)

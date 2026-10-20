@@ -12,8 +12,9 @@ except ImportError:
 from linguadocs.settings import settings
 
 client = QdrantClient(url=settings.qdrant_url, check_compatibility=False)
-model = SentenceTransformer("intfloat/multilingual-e5-small")
-COL, DIM = "chunks", 384
+# bge-m3 : 1024 dim, SANS préfixes "query:/passage:" (convention e5 uniquement)
+model = SentenceTransformer(settings.embedding_model)
+COL, DIM = "chunks", settings.embedding_dim
 
 # fastembed sparse BM25
 _sparse_model = None
@@ -35,15 +36,32 @@ def _get_sparse_model():
     return _sparse_model
 
 
+class RerankerUnavailableError(RuntimeError):
+    """Le cross-encoder n'a pas pu être chargé ni exécuté.
+
+    Pas de repli silencieux sur le tri par score : l'appelant doit
+    décider (HTTP 503, sortie d'éval, skip de test).
+    """
+
+
 def _get_reranker():
     global _reranker
     if "_reranker" not in globals():
         globals()["_reranker"] = None
-    if globals().get("_reranker") is None and CrossEncoder is not None:
+    if globals().get("_reranker") is None:
+        if CrossEncoder is None:
+            raise RerankerUnavailableError(
+                "reranker indisponible : mémoire insuffisante ou chargement échoué "
+                "(sentence-transformers.CrossEncoder indisponible)"
+            )
         try:
             globals()["_reranker"] = CrossEncoder(settings.reranker_model)
-        except Exception:
-            globals()["_reranker"] = None
+        except Exception as e:
+            # Échec non mis en cache : chaque appel retente le chargement.
+            raise RerankerUnavailableError(
+                "reranker indisponible : mémoire insuffisante ou chargement échoué "
+                f"({settings.reranker_model} : {e})"
+            ) from e
     return globals().get("_reranker")
 
 
@@ -109,7 +127,6 @@ def init(reset: bool = False) -> None:
     # vérifier si la collection a bien les deux configs, sinon recréer
     try:
         info = client.get_collection(COL)
-        # vérifier vectors_config contient "dense" et sparse_vectors_config contient "bm25"
         has_dense = False
         has_sparse = False
         try:
@@ -118,7 +135,6 @@ def init(reset: bool = False) -> None:
             if isinstance(vectors, dict) and "dense" in vectors:
                 has_dense = True
             elif hasattr(vectors, "size"):
-                # ancien format anonyme
                 has_dense = False
         except Exception:
             pass
@@ -148,7 +164,7 @@ def init(reset: bool = False) -> None:
 
 def index(user_id: str, items: list[dict]) -> None:
     # items: list de dict avec au moins "text"
-    dense_vecs = model.encode([f"passage: {it['text']}" for it in items], normalize_embeddings=True)
+    dense_vecs = model.encode([it["text"] for it in items], normalize_embeddings=True)
     # sparse via fastembed
     sparse_model = _get_sparse_model()
     sparse_vecs = []
@@ -164,7 +180,6 @@ def index(user_id: str, items: list[dict]) -> None:
 
     points = []
     for dense_v, sparse_emb, it in zip(dense_vecs, sparse_vecs, items):
-        # sparse qdrant
         if sparse_emb is not None and hasattr(sparse_emb, "indices"):
             sparse_vec = models.SparseVector(indices=list(sparse_emb.indices), values=list(sparse_emb.values))
         elif sparse_emb is not None and isinstance(sparse_emb, dict):
@@ -174,7 +189,6 @@ def index(user_id: str, items: list[dict]) -> None:
 
         # Pour Qdrant 1.19 avec vectors_config={"dense": ...} et sparse_vectors_config={"bm25": ...}
         # le PointStruct doit avoir vector={"dense": [...], "bm25": SparseVector}
-        # comme indiqué dans la tâche
         points.append(
             models.PointStruct(
                 id=str(uuid.uuid4()),
@@ -185,7 +199,6 @@ def index(user_id: str, items: list[dict]) -> None:
                 payload={"user_id": user_id, **it},
             )
         )
-    # upsert
     try:
         client.upsert(COL, points=points)
     except Exception as e:
@@ -226,15 +239,50 @@ def get_user_chunks(user_id: int | str) -> list[dict]:
     return [r.payload for r in records] if records else []
 
 
-def search(user_id: str | None, query: str, k: int = 5):
+def get_doc_chunks(user_id: int | str, doc_id: int | str) -> list[dict]:
+    """Chunks indexés d'un document, triés par index (chunk_key `{doc_id}#{idx}`).
+
+    Utilisé par le viewer latéral : le frontend surligne le chunk source exact
+    (même texte normalisé que celui envoyé au LLM).
+    """
+    if user_id is None:
+        raise TypeError("user_id est obligatoire")
+    flt = models.Filter(
+        must=[
+            models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id))),
+            models.FieldCondition(key="doc_id", match=models.MatchValue(value=str(doc_id))),
+        ]
+    )
+    records, _ = client.scroll(collection_name=COL, scroll_filter=flt, limit=1000, with_payload=True, with_vectors=False)
+    payloads = [r.payload for r in records] if records else []
+
+    def _idx(pl: dict) -> int:
+        key = str(pl.get("chunk_key") or "")
+        try:
+            return int(key.rsplit("#", 1)[1])
+        except (ValueError, IndexError):
+            return 0
+
+    payloads.sort(key=_idx)
+    return payloads
+
+
+def _build_filter(user_id: int | str, doc_id: int | str | None = None) -> models.Filter:
+    """Filtre Qdrant obligatoire : user_id toujours + doc_id si conversation ciblée."""
+    must = [models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id)))]
+    if doc_id:
+        must.append(models.FieldCondition(key="doc_id", match=models.MatchValue(value=str(doc_id))))
+    return models.Filter(must=must)
+
+
+def search(user_id: str | None, query: str, k: int = 5, doc_id: str | None = None):
     if user_id is None:
         raise TypeError("user_id est obligatoire - filtre manquant")
     if not query or not query.strip():
         return []
-    q = model.encode(f"query: {query}", normalize_embeddings=True).tolist()
-    flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id)))])
+    q = model.encode(query, normalize_embeddings=True).tolist()
+    flt = _build_filter(user_id, doc_id)
     try:
-        # dense avec vecteur nommé "dense"
         results = client.query_points(collection_name=COL, query=q, using="dense", query_filter=flt, limit=k, with_payload=True)
         return results.points
     except Exception as e:
@@ -253,7 +301,6 @@ def search(user_id: str | None, query: str, k: int = 5):
             url = f"{client._client.rest_uri}/collections/{COL}/points/search"
             resp = httpx.post(url, json={"vector": {"name": "dense", "vector": q} if False else q, "filter": flt_dict, "limit": k, "with_payload": True}, timeout=10.0)
             # pour vecteur nommé, il faut spécifier `vector_name`
-            # on réessaye avec l'ancien format
             try:
                 resp = httpx.post(url, json={"vector": q, "filter": flt_dict, "limit": k, "with_payload": True}, timeout=10.0)
                 resp.raise_for_status()
@@ -272,12 +319,12 @@ def search(user_id: str | None, query: str, k: int = 5):
         raise
 
 
-def search_sparse(user_id: str | None, query: str, k: int = 5):
+def search_sparse(user_id: str | None, query: str, k: int = 5, doc_id: str | None = None):
     if user_id is None:
         raise TypeError("user_id est obligatoire - filtre manquant")
     if not query or not query.strip():
         return []
-    flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id)))])
+    flt = _build_filter(user_id, doc_id)
     sparse_q = _text_to_sparse(query)
     if not sparse_q.indices:
         return []
@@ -293,15 +340,15 @@ def search_sparse(user_id: str | None, query: str, k: int = 5):
         return results.points
     except Exception:
         # fallback in-memory si Qdrant sparse non dispo
-        return search(user_id, query, k)
+        return search(user_id, query, k, doc_id=doc_id)
 
 
-def search_hybrid(user_id: str | None, query: str, k: int = 5) -> list:
+def search_hybrid(user_id: str | None, query: str, k: int = 5, doc_id: str | None = None) -> list:
     if user_id is None:
         raise TypeError("user_id est obligatoire - filtre manquant")
-    flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=str(user_id)))])
-    # Filtre user_id TOUJOURS dans chaque sous-requête
-    q_dense = model.encode(f"query: {query}", normalize_embeddings=True).tolist()
+    flt = _build_filter(user_id, doc_id)
+    # Filtre user_id (+ doc_id si ciblé) TOUJOURS dans chaque sous-requête
+    q_dense = model.encode(query, normalize_embeddings=True).tolist()
     sparse_q = _text_to_sparse(query)
 
     try:
@@ -314,17 +361,17 @@ def search_hybrid(user_id: str | None, query: str, k: int = 5) -> list:
                 Prefetch(query=sparse_q, using=SPARSE_NAME, filter=flt, limit=20),
             ],
             query=FusionQuery(fusion=Fusion.RRF),
+            query_filter=flt,
             limit=k,
             with_payload=True,
         )
         # Qdrant RRF retourne déjà fusionné et trié, on garde le score RRF mais on conserve aussi le payload
-        # Pour le seuil, on utilise le score dense original si possible, sinon RRF
         return results.points
     except Exception as e:
         # fallback python RRF si Qdrant fusion non supporté
         print(f"hybrid fusion fallback {e}")
-        dense_hits = search(user_id, query, k=k * 2)
-        sparse_hits = search_sparse(user_id, query, k=k * 2)
+        dense_hits = search(user_id, query, k=k * 2, doc_id=doc_id)
+        sparse_hits = search_sparse(user_id, query, k=k * 2, doc_id=doc_id)
         K = 60
         scores_rrf = {}
         scores_orig = {}
@@ -367,11 +414,6 @@ def rerank(query: str, results: list, top_n: int = 5) -> list:
     if top_n <= 0:
         return []
     reranker = _get_reranker()
-    if reranker is None:
-        try:
-            return sorted(results, key=lambda x: getattr(x, "score", 0) or 0, reverse=True)[:top_n]
-        except Exception:
-            return results[:top_n]
     pairs = []
     for r in results:
         pl = getattr(r, "payload", {}) or {}
@@ -379,8 +421,11 @@ def rerank(query: str, results: list, top_n: int = 5) -> list:
         pairs.append([query, text])
     try:
         scores = reranker.predict(pairs)
-    except Exception:
-        return results[:top_n]
+    except Exception as e:
+        raise RerankerUnavailableError(
+            "reranker indisponible : mémoire insuffisante ou chargement échoué "
+            f"(predict a échoué : {e})"
+        ) from e
     scored = list(zip(results, scores))
     scored.sort(key=lambda x: x[1], reverse=True)
     reranked = []

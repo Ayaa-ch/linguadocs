@@ -1,20 +1,23 @@
 import time
 import json
-from typing import Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from linguadocs.api.auth import current_user
-from linguadocs.api.models import User
+from linguadocs.api.database import get_session
+from linguadocs.api.models import Document, User
 from linguadocs.ingest.language import detect_lang, normalize
 from linguadocs.llm.client import generate_chat as _generate_chat
 from linguadocs.llm.client import generate_chat_stream as _generate_chat_stream
 from linguadocs.llm.client import strip_thinking
 from linguadocs.llm.prompts import build_messages
-from linguadocs.retrieval.retrieval import rerank, search, search_hybrid
-from linguadocs.retrieval.retrieval import search_sparse as search_sparse_fn
+from linguadocs.retrieval.retrieval import RerankerUnavailableError, rerank, search, search_hybrid
 from linguadocs.settings import settings
 
 router = APIRouter(prefix="/ask", tags=["ask"])
@@ -33,11 +36,17 @@ generate_chat_stream = _generate_chat_stream
 class AskRequest(BaseModel):
     question: str
     stream: bool = False
-    search_mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
+    # Conversation ciblée : le doc sélectionné dans la sidebar.
+    # None = tous les documents de l'utilisateur. Sinon filtre Qdrant strict.
+    doc_id: UUID | None = None
 
 
 @router.post("")
-async def ask(payload: AskRequest, user: User = Depends(current_user)):
+async def ask(
+    payload: AskRequest,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
     t0 = time.perf_counter()
     question_raw = payload.question.strip()
     if not question_raw:
@@ -49,21 +58,35 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
             "latency_ms": {"retrieve": 0, "rerank": 0, "generate": 0, "total": 0},
         }
 
-    # a. detect_lang
+    # Document ciblé : 404 s'il n'appartient pas au user,
+    # 409 si pas encore indexé (même règles métier que le frontend).
+    doc_filter: str | None = None
+    if payload.doc_id is not None:
+        result = await session.exec(
+            select(Document).where(Document.id == payload.doc_id, Document.user_id == user.id)
+        )
+        doc = result.first()
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document introuvable")
+        if doc.status != "indexed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Document non indexé (statut: {doc.status})",
+            )
+        doc_filter = str(doc.id)
+
+    # Pipeline unique, sans routage par langue :
+    #   Question -> Dense + Sparse retrieval -> RRF / fusion -> Reranker -> Top N
+    # detect_lang gardé uniquement comme métadonnée (question_lang réponse/history
+    # + langue de réponse LLM), jamais pour filtrer ou router la recherche.
     question_lang = detect_lang(question_raw)
-    # b. normalize
-    norm_q = normalize(question_raw, question_lang)
+    # Normalisation unique (NFKC + arabe toujours appliquée, sûre hors arabe)
+    norm_q = normalize(question_raw)
 
     # c. search avec filtre user_id obligatoire (JWT uniquement, jamais au LLM)
-    # selon search_mode
+    # Toujours hybrid : dense + sparse en parallèle, fusion RRF côté Qdrant.
     t_retrieve_start = time.perf_counter()
-    mode = payload.search_mode or settings.search_mode
-    if mode == "dense":
-        hits = search(str(user.id), norm_q, k=10)
-    elif mode == "sparse":
-        hits = search_sparse_fn(str(user.id), norm_q, k=10)
-    else:  # hybrid
-        hits = search_hybrid(str(user.id), norm_q, k=10)
+    hits = search_hybrid(str(user.id), norm_q, k=10, doc_id=doc_filter)
     t_retrieve = int((time.perf_counter() - t_retrieve_start) * 1000)
 
     if not hits:
@@ -78,19 +101,13 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
 
     # d. refus si score < seuil (réglable settings.refusal_threshold)
     # Échelles incompatibles : dense=cosinus ~0-1, RRF natif Qdrant ~0.016-0.033.
-    # Le chunking reste générique 400 mots (aucune règle par titre de doc).
-    # Pour hybrid/sparse on juge le refus sur le score dense (cosinus),
-    # pas sur le score RRF qui ne discrimine pas le hors-domaine.
-    if mode == "dense":
-        best = max((getattr(h, "score", 0) or 0) for h in hits) if hits else 0
-    elif mode == "hybrid":
-        try:
-            _dense_check = search(str(user.id), norm_q, k=3)
-            best = max((getattr(h, "score", 0) or 0) for h in _dense_check) if _dense_check else 0
-        except Exception:
-            best = 1.0  # si le check échoue, ne pas bloquer hybrid
-    else:  # sparse : pas de seuil pré-rerank fiable
-        best = 1.0
+    # On juge le refus sur un check dense (cosinus), pas sur le score RRF
+    # qui ne discrimine pas le hors-domaine.
+    try:
+        _dense_check = search(str(user.id), norm_q, k=3, doc_id=doc_filter)
+        best = max((getattr(h, "score", 0) or 0) for h in _dense_check) if _dense_check else 0
+    except Exception:
+        best = 1.0  # si le check échoue, ne pas bloquer
     if best < settings.refusal_threshold:
         total = int((time.perf_counter() - t0) * 1000)
         return {
@@ -101,9 +118,15 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
             "latency_ms": {"retrieve": t_retrieve, "rerank": 0, "generate": 0, "total": total},
         }
 
-    # rerank sur les résultats (ne reçoit jamais user_id)
+    # Reranker -> Top N (ne reçoit jamais user_id)
     t_rerank_start = time.perf_counter()
-    reranked = rerank(norm_q, hits, top_n=settings.reranker_top_n)
+    try:
+        reranked = rerank(norm_q, hits, top_n=settings.reranker_top_n)
+    except RerankerUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        ) from e
     t_rerank = int((time.perf_counter() - t_rerank_start) * 1000)
 
     # construire sources : on garde tous les reranked (le seuil a déjà été vérifié avant rerank)
@@ -115,6 +138,7 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
         score = getattr(h, "score", None)
         src = {
             "doc_id": pl.get("doc_id"),
+            "chunk_key": pl.get("chunk_key"),
             "filename": pl.get("filename"),
             "page": pl.get("page"),
             "text": pl.get("text"),
@@ -137,24 +161,26 @@ async def ask(payload: AskRequest, user: User = Depends(current_user)):
     #    LLM ne reçoit jamais user_id)
     system, user = build_messages(question_raw, chunks_for_prompt, question_lang)
 
-    # f. generate / stream
     if payload.stream:
         async def event_gen():
             # en-tête SSE avec sources d'abord + temps déjà mesurés
             # (le front affichait retrieve 0ms / generate 0ms car il les fabriquait)
             yield f"data: {json.dumps({'sources': sources, 'question_lang': question_lang, 'refused': False, 'latency_ms': {'retrieve': t_retrieve, 'rerank': t_rerank, 'generate': 0, 'total': 0}}, ensure_ascii=False)}\n\n"
             t_gen_start = time.perf_counter()
-            async for token in generate_stream(system, user):
-                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            try:
+                async for token in generate_stream(system, user):
+                    yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            except httpx.ReadTimeout:
+                yield f"data: {json.dumps({'error': 'LLM timeout : génération trop lente (>5 min), réessayez.'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
             t_gen = int((time.perf_counter() - t_gen_start) * 1000)
             total = int((time.perf_counter() - t0) * 1000)
             yield f"data: {json.dumps({'latency_ms': {'retrieve': t_retrieve, 'rerank': t_rerank, 'generate': t_gen, 'total': total}}, ensure_ascii=False)}\n\n"
-            # on pourrait envoyer latency à la fin
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
-    # non-stream
     t_gen_start = time.perf_counter()
     answer = await generate(system, user)
     answer = strip_thinking(answer)

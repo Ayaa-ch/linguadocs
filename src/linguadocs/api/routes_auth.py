@@ -33,7 +33,6 @@ class TokenResponse(BaseModel):
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, session: AsyncSession = Depends(get_session)):
-    # check existing
     result = await session.exec(select(User).where(User.email == payload.email.lower().strip()))
     existing = result.first()
     if existing:
@@ -80,12 +79,10 @@ async def _delete_account(user: User, session: AsyncSession):
     except Exception:
         pass
 
-    # fichiers sur disque
     user_dir = Path(settings.data_dir) / str(user.id)
     if user_dir.exists():
         shutil.rmtree(user_dir, ignore_errors=True)
 
-    # lignes Document
     for d in docs:
         await session.delete(d)
 
