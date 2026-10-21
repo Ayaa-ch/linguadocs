@@ -1,8 +1,7 @@
 # LinguaDocs — Local Multilingual RAG Assistant
 
 ![Login](docs/screenshots/01-login.png)
-![Workspace](docs/screenshots/02-welcome.png)
-![Arabic answer (RTL)](docs/screenshots/03-answer-ar-rtl.png)
+
 
 ---
 
