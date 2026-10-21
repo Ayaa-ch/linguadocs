@@ -1,7 +1,7 @@
 [project]
 name = "linguadocs"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local multilingual RAG assistant (FastAPI + Qdrant + Ollama), 100% CPU"
 readme = "README.md"
 authors = [
     { name = "Ayaa-ch", email = "ayachakour2004@gmail.com" }
@@ -13,11 +13,9 @@ dependencies = [
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
     "fastembed>=0.8.1",
-    "faster-whisper>=1.2.1",
     "fpdf2>=2.8.9",
     "greenlet>=3.5.6",
     "httpx>=0.28.1",
-    "jiwer>=4.0.0",
     "lingua-language-detector>=2.1.1",
     "pdfplumber>=0.11.10",
     "pydantic-settings>=2.15.0",
@@ -45,6 +43,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
 ]
-ui = [
-    "streamlit>=1.40.0",
-]
+
+[tool.pytest.ini_options]
+# pytest-timeout est un garde-fou : sans timeout, un test bloque (le suite
+# charge bge-m3 + le reranker) peut figer la session indefiniment.
+timeout = 600
