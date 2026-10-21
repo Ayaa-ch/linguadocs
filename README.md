@@ -10,40 +10,40 @@
 
 | | |
 |---|---|
-| ![](docs/screenshots/01-login.png) | **Connexion** — inscription / connexion par email + mot de passe, interface en EN / FR / ES / AR, thème clair/sombre. |
-| ![](docs/screenshots/02-welcome.png) | **Workspace** — documents importés à gauche, conversation à droite, viewer du document (chunks + pages) dans un panneau latéral. |
-| ![](docs/screenshots/03-answer-ar-rtl.png) | **Réponse sourcée** — réponse dans la langue de la question, sources cliquables `[fichier, page]`, mise en page RTL pour l'arabe. |
+| ![](docs/screenshots/01-login.png) | **Sign in** — email + password, interface in EN / FR / ES / AR, light & dark themes. |
+| ![](docs/screenshots/02-welcome.png) | **Workspace** — your documents on the left, the conversation on the right, document viewer (chunks + pages) in a side panel. |
+| ![](docs/screenshots/03-answer-ar-rtl.png) | **Cited answer** — answered in the language of the question, clickable `[file, page]` sources, right-to-left layout for Arabic. |
 
 ---
 
-## Projet
+## Project
 
-**LinguaDocs** est un assistant RAG multilingue, **100 % local** (CPU uniquement, rien ne sort de la machine).
+**LinguaDocs** is a multilingual RAG assistant that runs **entirely on your machine** (CPU only, nothing leaves the box).
 
-- On dépose ses documents (PDF, TXT, MD, DOCX — 50 Mo max), on pose une question, on obtient une réponse **citée** (fichier + page) dans la langue de la question.
-- L'isolation est stricte : chaque utilisateur ne voit que ses propres documents, à chaque couche du retrieval.
-- 4 langues gérées de bout en bout : **EN · FR · ES · AR** (avec RTL).
+- Drop your documents (PDF, TXT, MD, DOCX — 50 MB max), ask a question, get an **cited** answer (file + page) in the language of your question.
+- Isolation is strict: every user only ever sees their own documents, at every layer of the retrieval stack.
+- Four languages end to end: **EN · FR · ES · AR** (with RTL support).
 
 | | |
 |---|---|
-| Backend | FastAPI · SQLModel · PostgreSQL 16 (SQLite en test) |
-| Vecteurs | Qdrant — dense + BM25 sparse, fusion RRF, reranker cross-encoder |
+| Backend | FastAPI · SQLModel · PostgreSQL 16 (SQLite in tests) |
+| Vectors | Qdrant — dense + BM25 sparse, RRF fusion, cross-encoder reranker |
 | Embeddings | `BAAI/bge-m3` (1024 dims) |
 | Reranker | `BAAI/bge-reranker-v2-m3`, top 3 chunks |
-| LLM | Ollama `qwen2.5:3b-instruct` (local, streaming SSE) |
-| UI | HTML / CSS / JS maison, sans Node ni React |
+| LLM | Ollama `qwen2.5:3b-instruct` (local, SSE streaming) |
+| UI | Plain HTML / CSS / JS, no Node, no React |
 
 ---
 
-## Comment cloner
+## How to clone
 
-**Prérequis** : Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), Docker, [Ollama](https://ollama.com/).
+**Requirements**: Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), Docker, [Ollama](https://ollama.com/).
 
 ```bash
 git clone https://github.com/Ayaa-ch/linguadocs.git
 cd linguadocs
 
-uv sync                        # installe les dépendances (pyproject.toml + uv.lock)
+uv sync                        # install dependencies (pyproject.toml + uv.lock)
 
 docker compose up -d           # Qdrant (:6333) + PostgreSQL (:5432)
 ollama pull qwen2.5:3b-instruct
@@ -57,66 +57,70 @@ uv run uvicorn linguadocs.main:app --port 8000
 | API (Swagger) | http://127.0.0.1:8000/docs |
 | Health check | http://127.0.0.1:8000/health |
 
-Les variables d'environnement (base, Qdrant, Ollama, seuil de refus…) sont lues dans `src/linguadocs/settings.py` et surchargeables par un fichier `.env` à la racine.
+Settings (database, Qdrant, Ollama, refusal threshold…) live in `src/linguadocs/settings.py` and can be overridden by a `.env` file at the repository root.
 
 ---
 
-## Comment tester
+## How to test
 
 ```bash
-uv run pytest -q                 # 52 tests (SQLite en mémoire, LLM mocké) — ~2 min
+uv run pytest -q                 # 52 tests (in-memory SQLite, mocked LLM) — ~2 min
 ```
 
-Le harnais de mesure (latence, TTFT, débit) :
+Measurement harnesses:
 
 ```bash
-uv run python scripts/bench_latency.py     # breakdown ingest → retrieval → rerank → LLM
-uv run python scripts/bench_ttft.py         # time to first token selon top_n
-uv run python scripts/bench_num_predict.py  # débit vs num_predict
+uv run python scripts/bench_latency.py     # breakdown: ingest → retrieval → rerank → LLM
+uv run python scripts/bench_ttft.py         # time to first token per top_n
+uv run python scripts/bench_num_predict.py  # throughput vs num_predict
 ```
 
 ---
 
-## C'est quoi / Comment ça marche
+## What it is / How it works
 
-Un document déposé suit ce chemin :
+An uploaded document goes through:
 
 ```
 PDF / TXT / MD / DOCX
    → parse (pdfplumber / python-docx)      src/linguadocs/ingest/parsers.py
-   → normalisation Unicode + arabe          src/linguadocs/ingest/language.py
-   → découpe en chunks de 200 mots (±40)   src/linguadocs/ingest/chunker.py
-   → embeddings denses + BM25 sparse → Qdrant
-
-Question
-   → normalisation                          src/linguadocs/ingest/language.py
-   → recherche hybride (dense + BM25, fusion RRF), filtre user_id obligatoire
-   → reranker cross-encoder → 3 chunks      src/linguadocs/retrieval/retrieval.py
-   → refus si le score dense est trop bas   src/linguadocs/api/routes_ask.py
-   → prompt + LLM local (Ollama, SSE)       src/linguadocs/llm/
-   → réponse + sources cliquables
+   → Unicode + Arabic normalization         src/linguadocs/ingest/language.py
+   → chunking, 200 words (+40 overlap)     src/linguadocs/ingest/chunker.py
+   → dense embeddings + BM25 sparse → Qdrant
 ```
 
-Les points sensibles, en bref :
+A question goes through:
 
-- **Isolation** — le `user_id` du JWT est ajouté à **chaque** requête Qdrant ; sans lui, aucune recherche n'est possible.
-- **Reranker indisponible** — pas de repli silencieux sur le tri par score : `/ask` répond **503** avec un message explicite.
-- **Refus** — seuil `REFUSAL_THRESHOLD` sur le score dense (k=3), pas sur le score RRF qui ne discrimine pas le hors-domaine.
-- **Outils** — résumé / quiz / flashcards / traduction sont branchés sur `mocks.py` tant que le LLM n'est pas connecté.
+```
+Question
+   → normalization                          src/linguadocs/ingest/language.py
+   → hybrid retrieval (dense + BM25, RRF fusion), mandatory user_id filter
+   → cross-encoder reranker → 3 chunks      src/linguadocs/retrieval/retrieval.py
+   → refusal if the dense score is too low  src/linguadocs/api/routes_ask.py
+   → prompt + local LLM (Ollama, SSE)       src/linguadocs/llm/
+   → answer + clickable sources
+```
+
+The sharp edges, briefly:
+
+- **Isolation** — the `user_id` from the JWT is added to **every** Qdrant query; without it, no search can run.
+- **Reranker unavailable** — no silent fallback to score sorting: `/ask` answers **503** with an explicit message.
+- **Refusal** — the `REFUSAL_THRESHOLD` applies to the dense score (k=3), not to the RRF score, which cannot tell out-of-domain queries apart.
+- **Tools** — summary / quiz / flashcards / translation are wired to `mocks.py` until the LLM is connected.
 
 ---
 
 ## Coming soon
 
-Quatre fonctions sont **mockées** (`mocks.py`) : elles simulent un délai pour exercer les états de chargement de l'interface. Chaque route renvoie `501` tant que le LLM n'est pas branché.
+Four features are **mocked** (`mocks.py`): they simulate a delay so the interface loading states can be exercised. Every route answers `501` until the LLM is wired in.
 
-- Résumé de document
+- Document summary
 - Quiz
 - Flashcards
-- Traduction
+- Translation
 
 ---
 
-## Évaluation
+## Evaluation
 
-Le harnais d'évaluation (aligné sur le pipeline réel de l'app : mêmes chunking, mêmes paramètres, mêmes collections séparées) est en cours de finalisation et n'est pas encore publié.
+The evaluation harness (aligned with the real app pipeline: same chunking, same parameters, separate collections) is being finalized and is not published yet.
